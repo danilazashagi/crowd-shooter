@@ -62,9 +62,11 @@ export const ENEMY = {
   ACTIVATE_DIST: 58,      // enemies wake up when the squad is this close
   ZOMBIE_SPEED: 5.6,      // fast runners: you cannot just walk around a wave
   BRUTE_SPEED: 3.6,
-  MINI_SPEED: 2.0,        // mini-boss marches straight down the bridge
+  MINI_SPEED: 2.4,        // mini-boss marches down the bridge…
+  MINI_LATERAL: 4.2,      // …and side-steps fast to block the squad's lane while in front
   MINI_SCALE: 2.4,
-  LATERAL_CHASE: 0.9,     // share of sideways homing toward the squad
+  LATERAL_CHASE: 1.1,     // sideways speed toward the squad (× forward speed) while in front
+  DESPAWN_BEHIND: 14,     // enemies that slip past keep running and vanish this far behind
   LUNGE_DIST: 9,          // within this distance zombies sprint at the squad
   LUNGE_MUL: 1.35,
   CONTACT_PAD: 0.55,
@@ -92,10 +94,8 @@ export const GATE = {
   MIN_WIDTH: 0.9,           // a minus gate squeezed to this width is crushed; a plus gate stops here
   DIVIDER_SHARPNESS: 9,     // lerp speed of the wall (1/s, exponential, dt-based)
   FADE_SHARPNESS: 10,       // crushed gate fade-out speed
-  // --- per-gate height/spring feedback -------------------------------------------------
-  GROW_PER_POINT: 0.025,    // target height += this per point gained
-  MAX_GROW: 1.4,
-  SIZE_SHARPNESS: 8,
+  // --- hit feedback: height is FIXED, the spring only squashes the panel horizontally ----
+  PULSE_X: 0.05,            // horizontal pulse amount per unit of spring
   SPRING_K: 260,
   SPRING_DAMP: 13,
   HIT_IMPULSE: 0.35,

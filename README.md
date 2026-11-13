@@ -21,13 +21,17 @@ Open http://localhost:8080 (add `?debug` for an FPS counter and `window.__game`)
 - **Full-width walls**: a single red gate spanning the bridge (−10 … −25 by level/progress). It
   can't be avoided — shoot it down from afar, enough fire turns it positive.
 - Gates react from up to 40 units away; points get pricier and are rate-limited. The wall, widths
-  and labels move with `THREE.MathUtils.lerp` on delta time, plus a springy hit pop and white flash.
+  and labels move with `THREE.MathUtils.lerp` on delta time. Gate height is fixed — only widths
+  change; hits give a small horizontal spring pulse and a white flash.
   Bullets that hit a gate are absorbed: firepower vs. better math.
 - **No aim assist**: every soldier fires straight forward; shotguns fire a wall of parallel pellets.
   You aim by steering the squad.
 - **Squad size picks the weapon**: 1–9 pistols · 10–24 assault rifles · 25–49 shotguns · 50+ plasma miniguns.
 - **Mini-bosses** (armoured crimson juggernauts, 2.4× size) march straight down the bridge inside zombie waves, at least 2 per level. Each shows an exact `HP: 524 / 534` readout; the final boss bar shows `HP: 5939 / 8000`.
-- Zombies are fast (5.6 u/s), home in on the squad and sprint in the last 9 units — you have to shoot waves down, walking around them doesn't work.
+- Zombies are fast (5.6 u/s) and only ever run forward. While they are in front of the squad they
+  side-step toward it and sprint in the last 9 units; contact is frontal and costs soldiers at once.
+  Anything that slips past keeps running behind the camera and despawns (no U-turns — you can only
+  shoot forward). Mini-bosses side-step hard to block your lane, so you can't skirt them on the edge.
 - **Difficulty curve**: level 2 only adds a little HP and wave size; from level 3 on the horde also gets +10% speed, +7% armour and more soldiers lost per contact each level.
 - At the end of the bridge, the Mecha-Zombie Tank: dodge lane slams (red zones) and cannon orbs (ground markers).
 

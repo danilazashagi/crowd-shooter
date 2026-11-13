@@ -306,7 +306,7 @@ class Game {
       const g = {
         value: gd.value, alive: true, fade: 1, side: row.gates.length,   // side 0 = left, 1 = right
         x0: 0, x1: 0, x: 0, width: 0, vx0: 0, vx1: 0,                    // hitbox / visual ranges
-        charge: 0, gained: 0, cd: 0, size: 1, targetSize: 1, spring: 0, springV: 0, flash: 0, sign: 0,
+        charge: 0, gained: 0, cd: 0, spring: 0, springV: 0, flash: 0, sign: 0,
         panel, text, label, panelMat, labelMat,
       };
       this._paintGate(g);
@@ -521,13 +521,14 @@ class Game {
       if (row.type === 'wall') { g.vx0 = -W; g.vx1 = W; }
       else if (g.side === 0) { g.vx0 = -W; g.vx1 = row.dividerX; }
       else { g.vx0 = row.dividerX; g.vx1 = W; }
+      // HEIGHT IS FIXED: only the width follows the wall; the hit impulse is a horizontal squash
       const w = Math.max(0, g.vx1 - g.vx0);
-      const s = g.size + g.spring;
       g.panel.visible = g.text.visible = g.fade > 0.02 && w > 0.05;
       g.panel.position.x = (g.vx0 + g.vx1) / 2;
-      g.panel.scale.set(Math.max(0.01, w - 0.14), s, 1);
-      const lw = Math.min(w * 0.96, 3.8) * (1 + g.spring * 0.6);
-      g.text.position.set(g.panel.position.x, 1.35 * s, row.z + 0.03);
+      g.panel.scale.set(Math.max(0.01, (w - 0.14) * (1 + g.spring * GATE.PULSE_X)), 1, 1);
+      // label stays inside the fixed-height panel (max 1.9 tall, centred at 1.35 → top ≤ 2.3)
+      const lw = Math.min(Math.min(w * 0.96, 3.8) * (1 + g.spring * 0.15), 3.8);
+      g.text.position.set(g.panel.position.x, 1.35, row.z + 0.03);
       g.text.scale.set(Math.max(0.01, lw), Math.max(0.01, lw), 1);
       g.labelMat.opacity = g.fade;
     }
@@ -537,26 +538,22 @@ class Game {
     const neon = (g) => (g.value >= 0 ? 0x5ff4ff : 0xff4fd8);
     row.postL.material.color.setHex(neon(left));
     row.postR.material.color.setHex(neon(right));
-    row.postL.scale.y = left.size + left.spring;
-    row.postR.scale.y = right.size + right.spring;
     if (row.postMid) {
       const show = a.alive && b.alive ? 1 : Math.min(a.fade, b.fade);
       row.postMid.visible = show > 0.02;
       row.postMid.material.opacity = show;
       row.postMid.position.x = row.dividerX;
-      row.postMid.scale.y = Math.max(a.size + a.spring, b.size + b.spring) * 1.05;
     }
   }
 
   /**
    * Per-frame, dt-driven gate animation:
    *  - dividerX lerps toward dividerTarget (THREE.MathUtils.lerp, exponential factor),
-   *  - every gate's height lerps toward targetSize, a damped spring adds the hit "boing",
+   *  - gate HEIGHT never changes; a damped spring adds a small horizontal "boing" on hits,
    *  - flashes fade, crushed gates fade out.
    */
   updateGates(dt) {
     const kDiv = 1 - Math.exp(-GATE.DIVIDER_SHARPNESS * dt);
-    const kSize = 1 - Math.exp(-GATE.SIZE_SHARPNESS * dt);
     const kFade = 1 - Math.exp(-GATE.FADE_SHARPNESS * dt);
     const steps = Math.max(1, Math.ceil(dt / 0.016));
     const h = dt / steps;
@@ -566,7 +563,6 @@ class Game {
       for (const g of row.gates) {
         if (g.cd > 0) g.cd -= dt;
         if (g.flash > 0) g.flash = Math.max(0, g.flash - dt);
-        g.size = THREE.MathUtils.lerp(g.size, g.targetSize, kSize);
         g.fade = THREE.MathUtils.lerp(g.fade, g.alive ? 1 : 0, kFade);
         for (let i = 0; i < steps; i++) {
           g.springV += (-GATE.SPRING_K * g.spring - GATE.SPRING_DAMP * g.springV) * h;
@@ -756,7 +752,6 @@ class Game {
     g.label.set(g.value);
     this._paintGate(g);
     g.flash = GATE.FLASH_TIME;
-    g.targetSize = clamp(1 + g.gained * GATE.GROW_PER_POINT, 1, GATE.MAX_GROW);
     g.springV += impulse * (g.value === 0 ? 1.6 : 1);   // extra boing when − flips to +
   }
 
@@ -821,9 +816,21 @@ class Game {
   // =========================================================================
   // Enemies
   // =========================================================================
+  /**
+   * Enemy movement rules:
+   *  - everyone only ever moves FORWARD along +Z (toward the squad / camera), never turns back;
+   *  - while an enemy is IN FRONT of the squad it steers sideways toward the squad centre
+   *    (mini-bosses aggressively, to block the lane and force a fight);
+   *  - contact is frontal: crossing the squad's front line inside its width costs soldiers at once
+   *    (swept check, so fast enemies can't skip through on a slow frame);
+   *  - anything that slips past the squad's back line keeps running past the camera and despawns.
+   */
   updateEnemies(dt) {
     const sx = this.squadX, sz = this.squadZ;
-    const rx = this.radiusX + ENEMY.CONTACT_PAD, rz = this.radiusZ + ENEMY.CONTACT_PAD;
+    const rx = this.radiusX + ENEMY.CONTACT_PAD, rz = this.radiusZ;
+    const front = sz - rz - ENEMY.CONTACT_PAD;          // squad front line (enemies come from −Z)
+    const back = sz + rz;                               // squad back line
+    const P = this.params;
     for (const e of this.enemies) {
       if (!e.alive) continue;
       if (e.flash > 0) e.flash -= dt;
@@ -831,32 +838,41 @@ class Game {
         if (e.z > sz - ENEMY.ACTIVATE_DIST) e.active = true;
         else continue;
       }
+      const prevZ = e.z;
+      const ahead = e.z < back;                        // still in front of / inside the squad
       const dx = sx - e.x, dz = sz - e.z;
-      const d = Math.hypot(dx, dz) || 1;
       if (e.mini) {
-        // marches straight down the bridge, only drifting slowly toward the squad
-        e.z += ENEMY.MINI_SPEED * this.params.enemySpeedMul * dt;
-        e.x += clamp(dx, -1, 1) * 0.35 * dt;
+        e.z += ENEMY.MINI_SPEED * P.enemySpeedMul * dt;
+        if (ahead) {
+          // block the squad's path: track where the player is steering, fast sideways step
+          const aim = (this.targetX + sx) * 0.5 - e.x;
+          e.x += clamp(aim * 3, -1, 1) * ENEMY.MINI_LATERAL * P.enemySpeedMul * dt;
+        }
       } else {
-        const lunge = d < ENEMY.LUNGE_DIST ? ENEMY.LUNGE_MUL : 1;   // final sprint at the squad
-        const sp = (e.brute ? ENEMY.BRUTE_SPEED : ENEMY.ZOMBIE_SPEED) * this.params.enemySpeedMul * lunge * dt;
-        e.x += (dx / d) * sp * ENEMY.LATERAL_CHASE;
-        e.z += (dz / d) * sp;
+        const lunge = ahead && dz < ENEMY.LUNGE_DIST ? ENEMY.LUNGE_MUL : 1;   // final sprint
+        const sp = (e.brute ? ENEMY.BRUTE_SPEED : ENEMY.ZOMBIE_SPEED) * P.enemySpeedMul * lunge;
+        e.z += sp * dt;                                  // always forward, never back
+        if (ahead) e.x += clamp(dx * 2, -1, 1) * sp * ENEMY.LATERAL_CHASE * dt;
       }
       e.x = clamp(e.x, -TRACK.HALF_WIDTH + 0.4, TRACK.HALF_WIDTH - 0.4);
-      e.yaw = Math.atan2(dx, dz);
-      // contact with the crowd (elliptical footprint)
+      e.yaw = ahead ? Math.atan2(dx, Math.max(dz, 1)) : 0;
+
+      // frontal contact: the enemy reached the squad (crossed the front line this frame or is
+      // inside the crowd's footprint) within the squad's width
       const pad = e.mini ? 0.9 : 0;
-      const ex = (e.x - sx) / (rx + pad), ez = (e.z - sz) / (rz + pad);
-      if (ex * ex + ez * ez < 1) {
+      const inWidth = Math.abs(e.x - sx) < rx + pad;
+      const reached = e.z >= front - pad && prevZ < back;
+      if (inWidth && reached) {
         e.alive = false;
         this.particles.burst(e.x, 0.8, e.z, e.mini ? 30 : 8, [0x7fbf4a, 0x9a2a2a, 0xc2373a], 4, 1, 0.5);
         if (e.mini) this.shake = Math.max(this.shake, 0.6);
-        const P = this.params;
         this.loseSoldiers(e.mini ? P.miniKills : e.brute ? P.bruteKills : P.zombieKills,
           e.mini ? 'The mini-boss trampled your squad.' : 'The zombie horde broke through.');
         if (this.state === 'lose') return;
+        continue;
       }
+      // slipped past the squad: no U-turn, run on past the camera and despawn
+      if (e.z > sz + ENEMY.DESPAWN_BEHIND) e.alive = false;
     }
   }
 
@@ -866,9 +882,9 @@ class Game {
     const near = this.squadZ + 12, far = this.squadZ - 110;
     for (const e of this.enemies) {
       if (!e.alive || e.z > near || e.z < far) continue;
-      const ph = this.time * (e.active ? (e.mini ? 6 : 11) : 3) + e.phase;
+      const ph = this.time * (e.active ? (e.mini ? 7 : 13) : 3) + e.phase;
       const sc = e.mini ? ENEMY.MINI_SCALE : e.brute ? 1.65 : 1;
-      const yaw = e.mini ? Math.atan2(this.squadX - e.x, 8) : e.yaw;
+      const yaw = e.yaw;
       _v.set(e.x, e.active ? Math.abs(Math.sin(ph)) * (e.mini ? 0.18 : 0.12) : 0, e.z);
       _e.set(e.active ? 0.1 : 0, e.active ? yaw : Math.sin(ph * 0.5) * 0.3, Math.sin(ph) * (e.active ? (e.mini ? 0.06 : 0.12) : 0.05));
       _q.setFromEuler(_e);
