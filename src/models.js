@@ -173,7 +173,8 @@ export function makeBoss() {
   return g;
 }
 
-// --- Gate panel label: redrawn in place whenever bullets change its value ----
+// --- Gate number label: text only (transparent background), redrawn in place ---
+// Drawn on its own fixed-aspect plane so numbers never get squashed on narrow gates.
 export class GateLabel {
   constructor(value) {
     this.canvas = document.createElement('canvas');
@@ -188,23 +189,53 @@ export class GateLabel {
     if (value === this.value) return;
     this.value = value;
     const { ctx } = this;
-    const positive = value >= 0;
+    const label = (value >= 0 ? '+' : '−') + Math.abs(value);
     ctx.clearRect(0, 0, 256, 128);
-    const grd = ctx.createLinearGradient(0, 0, 0, 128);
-    grd.addColorStop(0, positive ? 'rgba(40,140,255,0.85)' : 'rgba(255,50,60,0.85)');
-    grd.addColorStop(1, positive ? 'rgba(10,70,200,0.55)' : 'rgba(160,10,20,0.55)');
-    ctx.fillStyle = grd;
-    ctx.fillRect(0, 0, 256, 128);
-    ctx.fillStyle = '#fff';
-    const label = (positive ? '+' : '−') + Math.abs(value);
-    ctx.font = `bold ${label.length > 3 ? 60 : 76}px Arial, sans-serif`;
+    ctx.font = `900 ${label.length > 3 ? 74 : 92}px Arial, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.lineWidth = 8;
-    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 14;
+    ctx.strokeStyle = 'rgba(8,10,24,0.9)';
     ctx.strokeText(label, 128, 68);
+    ctx.fillStyle = '#ffffff';
     ctx.fillText(label, 128, 68);
     this.texture.needsUpdate = true;
   }
   dispose() { this.texture.dispose(); }
+}
+
+// --- Numeric HP label ("HP: 500 / 500") for mini-bosses, camera-facing sprite ---
+export class HpLabel {
+  constructor() {
+    this.canvas = document.createElement('canvas');
+    this.canvas.width = 320; this.canvas.height = 64;
+    this.ctx = this.canvas.getContext('2d');
+    this.texture = new THREE.CanvasTexture(this.canvas);
+    this.texture.colorSpace = THREE.SRGBColorSpace;
+    this.sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.texture, depthTest: false, transparent: true }));
+    this.sprite.scale.set(3.8, 0.76, 1);
+    this.sprite.renderOrder = 12;
+    this.key = '';
+  }
+  /** Redraws only when the displayed integers change. */
+  set(hp, maxHp) {
+    const cur = Math.max(0, Math.ceil(hp)), max = Math.ceil(maxHp);
+    const key = cur + '/' + max;
+    if (key === this.key) return;
+    this.key = key;
+    const { ctx } = this;
+    ctx.clearRect(0, 0, 320, 64);
+    ctx.font = 'bold 34px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    const text = `HP: ${cur} / ${max}`;
+    ctx.strokeText(text, 160, 34);
+    ctx.fillStyle = '#ffe9ec';
+    ctx.fillText(text, 160, 34);
+    this.texture.needsUpdate = true;
+  }
 }

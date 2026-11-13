@@ -68,21 +68,22 @@ export const ENEMY = {
   CONTACT_PAD: 0.55,
 };
 
-// Shootable gates: bullets that hit a gate push its value up by +1 steps
-// (−20 → −19 → … → +1 …). Each next step costs more damage (POINT_COST + gained * POINT_GROWTH),
-// gates only react within ACTIVE_DIST of the squad and at most MAX_POINTS_PER_SEC,
-// so a huge squad cannot farm unlimited soldiers.
+// Shootable gate rows: bullets that hit ANY gate of a row add +1 to EVERY gate of that row
+// (+17/−25 → +18/−24 → …). Each next step costs more damage (POINT_COST + gained * POINT_GROWTH)
+// and is capped at MAX_POINTS_PER_SEC, so a huge squad cannot farm unlimited soldiers.
+// Borders slide: a gate's width follows the MAGNITUDE of its number, so as a −N gate is shot
+// toward zero it narrows and its neighbour widens (and it regrows once it turns positive).
 export const GATE = {
   POINT_COST: 1.5,
-  POINT_GROWTH: 0.45,
-  MAX_POINTS_PER_SEC: 3.5,
+  POINT_GROWTH: 0.6,
+  MAX_POINTS_PER_SEC: 2.5,
   ACTIVE_DIST: 40,        // bullets change gates from far away, so the effect is visible early
   MAX_PLUS: 20,           // no gate is generated above +20
-  // visual: gate frame scales with its value (smoothly, in updateRun)
-  SCALE_PER_POINT: 0.035, // scale per point gained/lost since the gate was spawned
-  SCALE_MIN: 0.7,
-  SCALE_MAX: 1.6,
-  SCALE_SHARPNESS: 9,
+  WEIGHT_BIAS: 6,         // width weight = baseWidth * (WEIGHT_BIAS + |value|)
+  MIN_WIDTH: 1.3,         // no gate gets narrower than this (world units)
+  LAYOUT_SHARPNESS: 7,    // smoothing of the sliding borders
+  FLASH_TIME: 0.12,       // white flash on hit
+  POP_TIME: 0.16,         // vertical "pop" when the number changes
 };
 
 export const POOLS = {
@@ -95,22 +96,26 @@ export const POOLS = {
 // Difficulty scaling --------------------------------------------------------
 export function levelParams(level) {
   const l = level - 1;
+  // Level 2 stays gentle: content grows only a little, threat multipliers start at level 3.
+  const g = l <= 1 ? l * 0.4 : l - 0.6;   // growth of HP / wave size
+  const t = Math.max(0, l - 1);           // growth of speed / armour / contact damage
   return {
     length: 330 + l * 45,
-    zombieHp: (p) => 2 + p * 6 + l * 3,
-    waveSize: (p) => Math.round(3 + p * 13 + l * 4),
-    miniHp: (p) => Math.round(350 + p * 1100 + l * 1400),
-    miniChance: (p) => (p > 0.3 ? 0.35 + l * 0.05 : 0),
+    zombieHp: (p) => 2 + p * 6 + g * 3,
+    waveSize: (p) => Math.round(3 + p * 13 + g * 4),
+    miniHp: (p) => Math.round(250 + p * 800 + g * 1000),
+    miniChance: (p) => (p > 0.2 ? 0.6 + l * 0.05 : 0),   // mini-bosses are frequent
+    minMinis: 2 + Math.min(2, l),
     bruteChance: (p) => (p > 0.35 ? 0.08 + p * 0.12 + l * 0.02 : 0),
     // gentle growth: +2 … +10 on normal gates, risky narrow gates up to GATE.MAX_PLUS
     gateBase: (p) => Math.round(2 + p * 7 + l * 0.6),
     // --- per-level threat scaling ---------------------------------------
-    enemySpeedMul: Math.min(1.6, 1 + l * 0.1),     // zombies & mini-bosses move faster
-    enemyArmor: Math.min(0.45, l * 0.07),          // share of bullet damage absorbed
-    zombieKills: 1 + Math.floor(l / 2),            // soldiers lost per zombie contact
-    bruteKills: 3 + l,
-    miniKills: 8 + l * 3,
-    bossHp: 8000 + l * 11000,
-    bossAttackEvery: Math.max(1.35, 2.5 - l * 0.15),
+    enemySpeedMul: Math.min(1.6, 1 + t * 0.1),     // zombies & mini-bosses move faster
+    enemyArmor: Math.min(0.45, t * 0.07),          // share of bullet damage absorbed
+    zombieKills: 1 + Math.floor(t / 2),            // soldiers lost per zombie contact
+    bruteKills: 3 + t,
+    miniKills: 8 + t * 3,
+    bossHp: Math.round(8000 + g * 11000),
+    bossAttackEvery: Math.max(1.35, 2.5 - g * 0.15),
   };
 }

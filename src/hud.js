@@ -11,7 +11,7 @@ export class Hud {
     this.el = {
       level: $('level'), progress: $('progress-fill'), squad: $('squad-label'),
       weapon: $('weapon'), weaponName: $('weapon-name'), weaponIcon: $('weapon-icon'), weaponNext: $('weapon-next'),
-      bossWrap: $('boss'), bossFill: $('boss-fill'), bossName: $('boss-name'),
+      bossWrap: $('boss'), bossFill: $('boss-fill'), bossName: $('boss-name'), bossHpText: $('boss-hp-text'),
       toast: $('toast'), hint: $('start-hint'), overlay: $('overlay'), overlayTitle: $('overlay-title'),
       overlaySub: $('overlay-sub'), overlayPrompt: $('overlay-prompt'), popups: $('popups'), fps: $('fps'),
     };
@@ -56,7 +56,12 @@ export class Hud {
     this._set('bossShow', this.el.bossWrap, 'display', show ? 'block' : 'none');
     if (name) this._set('bossName', this.el.bossName, 'text', name);
   }
-  setBoss(k) { this._set('bossHp', this.el.bossFill, 'width', (Math.max(0, k) * 100).toFixed(1) + '%'); }
+  /** Boss bar driven by exact numbers: width = hp / max, label "HP: 12345 / 19000". */
+  setBoss(hp, max) {
+    const cur = Math.max(0, Math.ceil(hp));
+    this._set('bossHp', this.el.bossFill, 'width', (cur / max * 100).toFixed(2) + '%');
+    this._set('bossHpText', this.el.bossHpText, 'text', `HP: ${cur} / ${Math.ceil(max)}`);
+  }
 
   toast(text, cls = '') {
     const t = this.el.toast;

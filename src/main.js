@@ -10,7 +10,7 @@ import {
 } from './config.js';
 import {
   makeSoldierGeometry, makeGunGeometries, makeZombieGeometry, makeMiniBossGeometry,
-  makeBoss, GateLabel,
+  makeBoss, GateLabel, HpLabel,
 } from './models.js';
 import { generateLevel } from './level.js';
 import { Input } from './input.js';
@@ -123,9 +123,11 @@ class Game {
     this.scene.add(this.levelRoot);
 
     // Gate shared parts
-    this.gatePostGeo = new THREE.BoxGeometry(0.22, 3.0, 0.22);
-    this.gatePostMat = new THREE.MeshLambertMaterial({ color: 0xf2f4f8 });
-    this.gateBeamMat = new THREE.MeshLambertMaterial({ color: 0x20242c });
+    this.gatePostGeo = new THREE.BoxGeometry(0.2, 2.9, 0.2);
+    this.gatePostGeo.translate(0, 1.45, 0);
+    this.gatePanelGeo = new THREE.PlaneGeometry(1, 2.2);   // scaled to the gate width each frame
+    this.gatePanelGeo.translate(0, 1.25, 0);
+    this.gateLabelGeo = new THREE.PlaneGeometry(1, 0.5);   // fixed 2:1 aspect for the number
 
     // Boss telegraph helpers
     const tGeo = new THREE.PlaneGeometry(1, 1);
@@ -204,8 +206,12 @@ class Game {
       fill.position.set(-1.15, 0, 0.001);
       bg.renderOrder = 10; fill.renderOrder = 11;
       g.add(bg, fill);
+      const hpText = new HpLabel();
+      hpText.sprite.position.set(0, 0.55, 0);
+      g.add(hpText.sprite);
       g.visible = false;
       g.userData.fill = fill;
+      g.userData.hpText = hpText;
       this.scene.add(g);
       this.hpBars.push(g);
     }
@@ -260,32 +266,32 @@ class Game {
     }
     this.levelRoot.add(pylons);
 
-    // Gates
-    this.rows = L.rows.map((r) => ({ z: r.z, done: false, gates: [], group: new THREE.Group() }));
+    // Gates: every gate = translucent panel + two neon posts + number label.
+    // Widths/positions are live (they slide as values change), see updateGates().
+    this.rows = L.rows.map((r) => ({
+      z: r.z, done: false, gates: [], group: new THREE.Group(), charge: 0, gained: 0, cd: 0,
+    }));
     for (const gd of L.gates) {
       const row = this.rows[gd.row];
       const label = new GateLabel(gd.value);
-      const panelGeo = new THREE.PlaneGeometry(gd.width - 0.2, 2.4);
-      const panelMat = new THREE.MeshBasicMaterial({ map: label.texture, transparent: true, side: THREE.DoubleSide, depthWrite: false });
-      this.levelDisposables.push(label, panelGeo, panelMat);
-      // each gate is its own frame group (pivot on the deck) so it can scale with its value
-      const frame = new THREE.Group();
-      frame.position.set(gd.x, 0, gd.z);
-      const panel = new THREE.Mesh(panelGeo, panelMat);
-      panel.position.set(0, 1.45, 0);
-      frame.add(panel);
-      for (const edge of [-1, 1]) {
-        const post = new THREE.Mesh(this.gatePostGeo, gd.width < 3 ? this.gateBeamMat : this.gatePostMat);
-        post.position.set(edge * gd.width / 2, 1.5, 0);
-        frame.add(post);
-      }
-      row.group.add(frame);
-      row.gates.push({
-        x: gd.x, width: gd.width, value: gd.value, startValue: gd.value, panel, frame, label,
-        charge: 0, gained: 0, cd: 0, pulse: 0, scale: 1,
-      });
+      const panelMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false });
+      const postMat = new THREE.MeshBasicMaterial({ toneMapped: false });
+      const labelMat = new THREE.MeshBasicMaterial({ map: label.texture, transparent: true, depthWrite: false });
+      this.levelDisposables.push(label, panelMat, postMat, labelMat);
+      const panel = new THREE.Mesh(this.gatePanelGeo, panelMat);
+      const postL = new THREE.Mesh(this.gatePostGeo, postMat);
+      const postR = new THREE.Mesh(this.gatePostGeo, postMat);
+      const text = new THREE.Mesh(this.gateLabelGeo, labelMat);
+      text.renderOrder = 2;
+      for (const o of [panel, postL, postR, text]) { o.position.z = gd.z; row.group.add(o); }
+      const g = {
+        x: gd.x, width: gd.width, value: gd.value, baseWidth: gd.width,
+        panel, postL, postR, text, label, panelMat, postMat, flash: 0, pop: 0, sign: 0,
+      };
+      this._paintGate(g);
+      row.gates.push(g);
     }
-    for (const row of this.rows) this.levelRoot.add(row.group);
+    for (const row of this.rows) { this.levelRoot.add(row.group); this._layoutRow(row, 1); }
 
     // Enemies
     this.enemies = L.enemies.map((e) => ({
@@ -318,7 +324,7 @@ class Game {
     this.state = this.state === undefined ? 'ready' : this.state;
     this.hud.setLevel(level);
     this.hud.showBoss(false);
-    this.hud.setBoss(1);
+    this.hud.setBoss(this.boss.hp, this.boss.maxHp);
     this.hud.overlay(false);
     this.camPos.set(0, 10.5, this.squadZ + 11.5);
     this.camLook.set(0, 0, this.squadZ - 10);
@@ -448,32 +454,76 @@ class Game {
     }
   }
 
+  /** Colour a gate by sign: cyan neon for plus, magenta/red for minus. */
+  _paintGate(g) {
+    const sign = g.value >= 0 ? 1 : -1;
+    if (sign === g.sign) return;
+    g.sign = sign;
+    g.baseColor = new THREE.Color(sign > 0 ? 0x1e7bff : 0xff2448);
+    g.panelMat.color.copy(g.baseColor);
+    g.postMat.color.setHex(sign > 0 ? 0x5ff4ff : 0xff4fd8);
+  }
+
   /**
-   * Gate frames scale smoothly with their value: every point gained since spawn makes the
-   * arch taller/wider (negative gates shrink while being shot toward zero), plus a short
-   * hit "pop". Exponential smoothing keeps it frame-rate independent.
+   * Slide the borders of a row: each gate's share of the bridge width follows the magnitude
+   * of its number, so a shrinking −N narrows and its neighbour widens. `k` = smoothing (1 = snap).
    */
+  _layoutRow(row, k) {
+    const total = TRACK.HALF_WIDTH * 2;
+    let sum = 0;
+    for (const g of row.gates) {
+      g.weight = g.baseWidth * (GATE.WEIGHT_BIAS + Math.abs(g.value));
+      sum += g.weight;
+    }
+    // target widths with a minimum width, then smooth toward them
+    let fixed = 0, free = 0;
+    for (const g of row.gates) {
+      g.target = (g.weight / sum) * total;
+      if (g.target < GATE.MIN_WIDTH) { g.target = GATE.MIN_WIDTH; fixed += GATE.MIN_WIDTH; } else free += g.target;
+    }
+    const scale = (total - fixed) / (free || 1);
+    for (const g of row.gates) if (g.target > GATE.MIN_WIDTH) g.target *= scale;
+    let x = -TRACK.HALF_WIDTH;
+    for (const g of row.gates) {
+      g.width += (g.target - g.width) * k;
+      g.x = x + g.width / 2;
+      x += g.width;
+    }
+    // apply to meshes
+    for (const g of row.gates) {
+      const popY = 1 + g.pop * 1.6;
+      g.panel.position.x = g.x;
+      g.panel.scale.set(g.width - 0.18, popY, 1);
+      g.postL.position.x = g.x - g.width / 2 + 0.06;
+      g.postR.position.x = g.x + g.width / 2 - 0.06;
+      g.postL.scale.y = g.postR.scale.y = popY;
+      const lw = Math.min(g.width * 0.98, 3.8) * (1 + g.pop * 1.4);
+      g.text.position.set(g.x, 1.35 * popY, row.z + 0.03);
+      g.text.scale.set(lw, lw, 1);
+    }
+  }
+
+  /** Smooth, dt-driven gate animation: sliding borders, white hit flash, number pop. */
   updateGates(dt) {
-    const k = damp(GATE.SCALE_SHARPNESS, dt);
+    const k = damp(GATE.LAYOUT_SHARPNESS, dt);
     for (const row of this.rows) {
       if (row.z > this.squadZ + 15 || row.z < this.squadZ - 120) continue;
+      if (row.cd > 0) row.cd -= dt;
       for (const g of row.gates) {
-        if (g.cd > 0) g.cd -= dt;
-        if (g.pulse > 0) g.pulse = Math.max(0, g.pulse - dt);
-        const target = clamp(1 + (g.value - g.startValue) * GATE.SCALE_PER_POINT, GATE.SCALE_MIN, GATE.SCALE_MAX);
-        g.scale += (target - g.scale) * k;
-        const pop = g.pulse * 1.6;
-        const sy = g.scale * (1 + pop);
-        const sx = (1 + (g.scale - 1) * 0.3) * (1 + pop * 0.6);
-        g.frame.scale.set(sx, sy, 1);
+        if (g.flash > 0) g.flash = Math.max(0, g.flash - dt);
+        if (g.pop > 0) g.pop = Math.max(0, g.pop - dt);
+        const f = g.flash / GATE.FLASH_TIME;
+        g.panelMat.color.copy(g.baseColor).lerp(WHITE, f * 0.85);
+        g.panelMat.opacity = (row.done ? (g.chosen ? 0.12 : 0.3) : 0.6) + f * 0.3;
       }
+      if (!row.done) this._layoutRow(row, k);
     }
   }
 
   applyGate(gate, row) {
     const before = this.count;
     this.count = Math.max(0, this.count + gate.value);
-    for (const g of row.gates) g.panel.material.opacity = g === gate ? 0.15 : 0.35;
+    gate.chosen = true;
     const color = gate.value >= 0 ? [0x4ad2ff, 0xffffff, 0x2f7bff] : [0xff3b4a, 0xffffff];
     this.particles.burst(gate.x, 1.4, row.z, 26, color, 6, 1, 0.7);
     _v.set(this.squadX, 2.5, this.squadZ).project(this.camera);
@@ -620,7 +670,7 @@ class Game {
     for (const row of this.rows) {
       if (row.done || !(az >= row.z && bz < row.z) || this.squadZ - row.z > GATE.ACTIVE_DIST) continue;
       for (const g of row.gates) {
-        if (Math.abs(bx - g.x) <= g.width / 2) { this.hitGate(g, dmg, bx, row.z); return true; }
+        if (Math.abs(bx - g.x) <= g.width / 2) { this.hitGateRow(row, g, dmg, bx); return true; }
       }
     }
     // Enemies
@@ -635,19 +685,26 @@ class Game {
     return false;
   }
 
-  /** Bullets that hit a gate push its value up: −20 → −19 → … → 0 → +1 → … */
-  hitGate(g, dmg, bx, gz) {
-    const cost = GATE.POINT_COST + g.gained * GATE.POINT_GROWTH;
-    g.pulse = Math.max(g.pulse, 0.03);
-    g.charge = Math.min(g.charge + dmg, cost * 2);
-    if (g.cd > 0 || g.charge < cost) return;
-    g.charge -= cost;
-    g.cd = 1 / GATE.MAX_POINTS_PER_SEC;
-    g.gained++;
-    g.value += 1;
-    g.label.set(g.value);
-    g.pulse = g.value === 0 ? 0.25 : 0.12;   // bigger pop when the gate flips from − to +
-    this.particles.burst(bx, 1.2, gz, 2, g.value >= 0 ? [0x8ff0ff, 0xffffff] : [0xff9aa0, 0xffffff], 2.5, 0.5, 0.35);
+  /**
+   * A bullet hit any gate of a row: every gate of that row climbs by +1 per step
+   * (−20 → −19 …, +5 → +6 …). The struck gate flashes white on every bullet.
+   */
+  hitGateRow(row, g, dmg, bx) {
+    g.flash = Math.max(g.flash, GATE.FLASH_TIME * 0.6);
+    const cost = GATE.POINT_COST + row.gained * GATE.POINT_GROWTH;
+    row.charge = Math.min(row.charge + dmg, cost * 2);
+    if (row.cd > 0 || row.charge < cost) return;
+    row.charge -= cost;
+    row.cd = 1 / GATE.MAX_POINTS_PER_SEC;
+    row.gained++;
+    for (const o of row.gates) {
+      o.value += 1;
+      o.label.set(o.value);
+      this._paintGate(o);
+      o.flash = GATE.FLASH_TIME;
+      o.pop = o.value === 0 ? GATE.POP_TIME * 1.8 : GATE.POP_TIME;   // bigger pop when − flips to +
+    }
+    this.particles.burst(bx, 1.4, row.z, 3, g.value >= 0 ? [0x8ff0ff, 0xffffff] : [0xff9ad8, 0xffffff], 3, 0.5, 0.35);
   }
 
   damageEnemy(e, dmg) {
@@ -660,7 +717,6 @@ class Game {
         for (let k = 0; k < 3; k++) this.particles.burst(e.x + rand(-0.8, 0.8), rand(0.8, 2.5), e.z, 18, [0xc2373a, 0x59616e, 0xffc23a, 0xfff04a], 7, 1.4, 0.9);
         this.rings.spawn(e.x, e.z, 5, 0xffc23a, 0.5);
         this.shake = Math.max(this.shake, 0.5);
-        this.hud.toast('MINI-BOSS DOWN!', 't1');
         return;
       }
       this.particles.burst(e.x, 0.8, e.z, e.brute ? 14 : 6, [0x7fbf4a, 0x9a2a2a, 0x4a3f36], e.brute ? 6 : 4.5, e.brute ? 1.3 : 0.9, 0.6);
@@ -677,10 +733,8 @@ class Game {
       if (!e.alive) continue;
       if (e.flash > 0) e.flash -= dt;
       if (!e.active) {
-        if (e.z > sz - ENEMY.ACTIVATE_DIST) {
-          e.active = true;
-          if (e.mini) this.hud.toast('MINI-BOSS!', 'bad');
-        } else continue;
+        if (e.z > sz - ENEMY.ACTIVATE_DIST) e.active = true;
+        else continue;
       }
       const dx = sx - e.x, dz = sz - e.z;
       const d = Math.hypot(dx, dz) || 1;
@@ -735,6 +789,7 @@ class Game {
           bar.position.set(e.x, 4.3, e.z);
           bar.quaternion.copy(this.camera.quaternion);
           bar.userData.fill.scale.x = 2.3 * Math.max(0, e.hp / e.maxHp);
+          bar.userData.hpText.set(e.hp, e.maxHp);
         }
         continue;
       }
@@ -914,7 +969,7 @@ class Game {
   updateHud() {
     this.hud.setProgress(-this.squadZ / this.layout.length);
     this.hud.setWeapon(this.tier, this.count);
-    if (this.state === 'boss') this.hud.setBoss(this.boss.hp / this.boss.maxHp);
+    if (this.state === 'boss') this.hud.setBoss(this.boss.hp, this.boss.maxHp);
     _v.set(this.squadX, 1.6 + this.radiusZ * 0.15, this.squadZ - this.radiusZ - 0.3).project(this.camera);
     this.hud.setSquad(this.count, (_v.x * 0.5 + 0.5) * innerWidth, (-_v.y * 0.5 + 0.5) * innerHeight, this.count > 0 && this.state !== 'win');
   }

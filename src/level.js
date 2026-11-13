@@ -117,8 +117,9 @@ export function generateLevel(level) {
       // COMBAT: zombie wave (sometimes led by a mini-boss).
       const cx = (rnd() * 2 - 1) * 1.5;
       addWave(p, cx);
-      // guarantee one mini-boss around mid-level, random extra ones later
-      if ((minis === 0 && p > 0.45) || rnd() < P.miniChance(p) * (minis ? 0.5 : 1)) {
+      // frequent mini-bosses: guarantee at least P.minMinis per level, spread over the track
+      const owed = minis < Math.ceil(p * P.minMinis);
+      if (p > 0.2 && (owed || rnd() < P.miniChance(p))) {
         addMini(p, Math.max(-2.5, Math.min(2.5, cx)));
       }
       lastWasGate = false;

@@ -44,8 +44,10 @@
     #boss { top: calc(max(10px, env(safe-area-inset-top)) + 54px); left: 50%; transform: translateX(-50%);
       width: min(480px, 90vw); display: none; text-align: center; }
     #boss-name { font-size: 15px; color: #ffdddd; text-shadow: 0 2px 0 #000; letter-spacing: 1px; }
-    #boss-bar { margin-top: 4px; height: 16px; border-radius: 8px; background: var(--panel);
+    #boss-bar { position: relative; margin-top: 4px; height: 22px; border-radius: 10px; background: var(--panel);
       border: 2px solid #fff; overflow: hidden; }
+    #boss-hp-text { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      font: bold 13px Arial, sans-serif; letter-spacing: .5px; text-shadow: 0 1px 2px #000, 0 0 4px #000; }
     #boss-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #ff2e3e, #ff8a2a);
       transition: width .12s linear; }
 
@@ -94,7 +96,7 @@
 
   <div id="boss" class="ui">
     <div id="boss-name">MECHA-ZOMBIE TANK</div>
-    <div id="boss-bar"><div id="boss-fill"></div></div>
+    <div id="boss-bar"><div id="boss-fill"></div><div id="boss-hp-text">HP: 0 / 0</div></div>
   </div>
 
   <div id="squad-label" class="ui">4</div>
