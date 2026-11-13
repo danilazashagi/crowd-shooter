@@ -115,6 +115,31 @@ export function makeZombieGeometry() {
   ]);
 }
 
+// --- Mini-boss: armoured crimson mutant juggernaut (faces +Z, drawn at ENEMY.MINI_SCALE)
+export function makeMiniBossGeometry() {
+  const skin = 0xc2373a, steel = 0x59616e, dark = 0x23262d, gold = 0xffc23a, glow = 0xfff04a;
+  return merge([
+    part(box(0.3, 0.5, 0.26), dark, [-0.17, 0.25, 0]),                       // legs
+    part(box(0.3, 0.5, 0.26), dark, [0.17, 0.25, 0]),
+    part(box(0.34, 0.14, 0.34), steel, [-0.17, 0.42, 0.02]),                 // knee guards
+    part(box(0.34, 0.14, 0.34), steel, [0.17, 0.42, 0.02]),
+    part(box(0.76, 0.62, 0.44), skin, [0, 0.84, 0.04], [0.2, 0, 0]),         // torso
+    part(box(0.68, 0.46, 0.08), steel, [0, 0.86, 0.28], [0.2, 0, 0]),        // chest plate
+    part(box(0.16, 0.16, 0.06), glow, [0, 0.9, 0.34], [0.2, 0, 0]),          // glowing core
+    part(box(0.36, 0.22, 0.42), steel, [-0.5, 1.14, 0.04]),                  // shoulder pads
+    part(box(0.36, 0.22, 0.42), steel, [0.5, 1.14, 0.04]),
+    part(box(0.08, 0.26, 0.08), gold, [-0.56, 1.34, 0.04], [0, 0, 0.3]),     // shoulder spikes
+    part(box(0.08, 0.26, 0.08), gold, [0.56, 1.34, 0.04], [0, 0, -0.3]),
+    part(sph(0.24), skin, [0, 1.36, 0.14]),                                  // head
+    part(box(0.46, 0.22, 0.4), steel, [0, 1.46, 0.12]),                      // helmet
+    part(box(0.36, 0.06, 0.04), glow, [0, 1.38, 0.38]),                      // visor slit
+    part(box(0.2, 0.56, 0.2), skin, [-0.5, 0.86, 0.26], [-1.0, 0, 0]),       // arms
+    part(box(0.2, 0.56, 0.2), skin, [0.5, 0.86, 0.26], [-1.0, 0, 0]),
+    part(box(0.3, 0.3, 0.3), steel, [-0.5, 0.7, 0.5]),                       // armoured fists
+    part(box(0.3, 0.3, 0.3), steel, [0.5, 0.7, 0.5]),
+  ]);
+}
+
 // --- Explosive barrel --------------------------------------------------------
 export function makeBarrelGeometry() {
   return merge([
@@ -159,29 +184,40 @@ export function makeBoss() {
   return g;
 }
 
-// --- Gate panel with CanvasTexture label ------------------------------------
-export function makeGateTexture(value) {
-  const c = document.createElement('canvas');
-  c.width = 256; c.height = 128;
-  const ctx = c.getContext('2d');
-  const positive = value >= 0;
-  const grd = ctx.createLinearGradient(0, 0, 0, 128);
-  grd.addColorStop(0, positive ? 'rgba(40,140,255,0.85)' : 'rgba(255,50,60,0.85)');
-  grd.addColorStop(1, positive ? 'rgba(10,70,200,0.55)' : 'rgba(160,10,20,0.55)');
-  ctx.fillStyle = grd;
-  ctx.fillRect(0, 0, 256, 128);
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 76px Arial, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.lineWidth = 8;
-  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-  const label = (positive ? '+' : '−') + Math.abs(value);
-  ctx.strokeText(label, 128, 68);
-  ctx.fillText(label, 128, 68);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
+// --- Gate panel label: redrawn in place whenever bullets change its value ----
+export class GateLabel {
+  constructor(value) {
+    this.canvas = document.createElement('canvas');
+    this.canvas.width = 256; this.canvas.height = 128;
+    this.ctx = this.canvas.getContext('2d');
+    this.texture = new THREE.CanvasTexture(this.canvas);
+    this.texture.colorSpace = THREE.SRGBColorSpace;
+    this.value = null;
+    this.set(value);
+  }
+  set(value) {
+    if (value === this.value) return;
+    this.value = value;
+    const { ctx } = this;
+    const positive = value >= 0;
+    ctx.clearRect(0, 0, 256, 128);
+    const grd = ctx.createLinearGradient(0, 0, 0, 128);
+    grd.addColorStop(0, positive ? 'rgba(40,140,255,0.85)' : 'rgba(255,50,60,0.85)');
+    grd.addColorStop(1, positive ? 'rgba(10,70,200,0.55)' : 'rgba(160,10,20,0.55)');
+    ctx.fillStyle = grd;
+    ctx.fillRect(0, 0, 256, 128);
+    ctx.fillStyle = '#fff';
+    const label = (positive ? '+' : '−') + Math.abs(value);
+    ctx.font = `bold ${label.length > 3 ? 60 : 76}px Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.strokeText(label, 128, 68);
+    ctx.fillText(label, 128, 68);
+    this.texture.needsUpdate = true;
+  }
+  dispose() { this.texture.dispose(); }
 }
 
 // --- Small number label (barrel HP) -----------------------------------------

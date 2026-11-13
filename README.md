@@ -12,7 +12,14 @@ Open http://localhost:8080 (add `?debug` for an FPS counter and `window.__game`)
 ## Rules
 - Gates are **only `+N` / `−N`**. Risk rows offer a narrow 2-unit gate with a big bonus,
   flanked by minus gates and guarded by an explosive barrel.
+- **Gates are shootable**: bullets hitting a gate push its number up one step at a time
+  (`−20 → −19 → … → +1 → +2`). Gates react only when close (18 units), each step costs a bit more
+  and the rate is capped, so shooting helps but cannot be farmed endlessly. Bullets that hit a gate
+  are absorbed, so you trade firepower against zombies for better math.
+- **No aim assist**: every soldier fires straight forward; shotguns fire a wall of parallel pellets.
+  You aim by steering the squad.
 - **Squad size picks the weapon**: 1–9 pistols · 10–24 assault rifles · 25–49 shotguns · 50+ plasma miniguns.
+- **Mini-boss** (armoured crimson juggernaut, 2.4× size, own HP bar) marches straight down the bridge inside zombie waves; if it reaches the squad, 8 soldiers die.
 - Zombies/mutant brutes rush the squad; barrels show HP on the lid and blow up nearby enemies (and your squad, if you run into one).
 - At the end of the bridge, the Mecha-Zombie Tank: dodge lane slams (red zones) and cannon orbs (ground markers).
 

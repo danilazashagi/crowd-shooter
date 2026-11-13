@@ -19,7 +19,7 @@ export function mulberry32(seed) {
  * Layout:
  *  gates:   [{ z, x, width, value }]  (gates sharing the same z form one row)
  *  rows:    [{ z, gateIdx: [...] }]
- *  enemies: [{ x, z, hp, brute }]
+ *  enemies: [{ x, z, hp, brute, mini }]
  *  barrels: [{ x, z, hp }]
  *  bossZ, length
  */
@@ -53,8 +53,16 @@ export function generateLevel(level) {
         z: z - 4 - rnd() * 12,
         hp: brute ? hp * 6 : hp,
         brute,
+        mini: false,
       });
     }
+  };
+
+  // Mini-boss: marches inside a wave, behind the first zombies.
+  let minis = 0;
+  const addMini = (p, x) => {
+    minis++;
+    out.enemies.push({ x, z: z - 10, hp: P.miniHp(p), brute: false, mini: true });
   };
 
   while (-z < P.length - 20) {
@@ -71,7 +79,7 @@ export function generateLevel(level) {
         const big = base * 2 + Math.round(rnd() * base);
         const side = Math.max(2, Math.round(base * (0.4 + rnd() * 0.5)));
         const narrow = 2.0;
-        const cx = pick([-2.9, 0, 0, 2.9]);
+        const cx = pick([-2.9, 0, 2.9]);
         const leftW = cx - narrow / 2 + W, rightW = W - (cx + narrow / 2);
         addRow([
           { x: -W + leftW / 2, width: leftW, value: -side },
@@ -104,7 +112,12 @@ export function generateLevel(level) {
       lastWasGate = true;
     } else {
       // COMBAT: zombie wave, sometimes barrels in the middle of it.
-      addWave(p, (rnd() * 2 - 1) * 1.5);
+      const cx = (rnd() * 2 - 1) * 1.5;
+      addWave(p, cx);
+      // guarantee one mini-boss around mid-level, random extra ones later
+      if ((minis === 0 && p > 0.45) || rnd() < P.miniChance(p) * (minis ? 0.5 : 1)) {
+        addMini(p, Math.max(-2.5, Math.min(2.5, cx)));
+      }
       if (rnd() < 0.55) {
         const count = 1 + Math.floor(rnd() * 2);
         for (let i = 0; i < count; i++) {

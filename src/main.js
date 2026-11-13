@@ -6,11 +6,11 @@
 // ---------------------------------------------------------------------------
 import * as THREE from 'three';
 import {
-  TRACK, SQUAD, WEAPON_TIERS, tierForCount, ENEMY, BARREL, POOLS, levelParams,
+  TRACK, SQUAD, WEAPON_TIERS, tierForCount, ENEMY, BARREL, GATE, POOLS, levelParams,
 } from './config.js';
 import {
-  makeSoldierGeometry, makeGunGeometries, makeZombieGeometry, makeBarrelGeometry, makeBoss,
-  makeGateTexture, NumberSprite,
+  makeSoldierGeometry, makeGunGeometries, makeZombieGeometry, makeMiniBossGeometry, makeBarrelGeometry,
+  makeBoss, GateLabel, NumberSprite,
 } from './models.js';
 import { generateLevel } from './level.js';
 import { Input } from './input.js';
@@ -184,6 +184,32 @@ class Game {
     this.zombieMesh.count = 0;
     this.scene.add(this.zombieMesh);
 
+    // Mini-bosses: own armoured skin, drawn larger
+    this.miniMesh = new THREE.InstancedMesh(makeMiniBossGeometry(), mat, 8);
+    this.miniMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.miniMesh.setColorAt(0, WHITE);
+    this.miniMesh.frustumCulled = false;
+    this.miniMesh.count = 0;
+    this.scene.add(this.miniMesh);
+
+    // Floating HP bars for mini-bosses (camera-facing billboards)
+    const barBg = new THREE.PlaneGeometry(2.4, 0.3);
+    const barFill = new THREE.PlaneGeometry(1, 0.2);
+    barFill.translate(0.5, 0, 0);   // anchored at its left edge
+    this.hpBars = [];
+    for (let i = 0; i < 4; i++) {
+      const g = new THREE.Group();
+      const bg = new THREE.Mesh(barBg, new THREE.MeshBasicMaterial({ color: 0x111111, transparent: true, opacity: 0.75, depthTest: false }));
+      const fill = new THREE.Mesh(barFill, new THREE.MeshBasicMaterial({ color: 0xff3040, transparent: true, depthTest: false, toneMapped: false }));
+      fill.position.set(-1.15, 0, 0.001);
+      bg.renderOrder = 10; fill.renderOrder = 11;
+      g.add(bg, fill);
+      g.visible = false;
+      g.userData.fill = fill;
+      this.scene.add(g);
+      this.hpBars.push(g);
+    }
+
     // Barrels
     this.barrelMesh = new THREE.InstancedMesh(makeBarrelGeometry(), mat, 64);
     this.barrelMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -247,10 +273,10 @@ class Game {
     this.rows = L.rows.map((r) => ({ z: r.z, done: false, gates: [], group: new THREE.Group() }));
     for (const gd of L.gates) {
       const row = this.rows[gd.row];
-      const tex = makeGateTexture(gd.value);
+      const label = new GateLabel(gd.value);
       const panelGeo = new THREE.PlaneGeometry(gd.width - 0.2, 2.4);
-      const panelMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide, depthWrite: false });
-      this.levelDisposables.push(tex, panelGeo, panelMat);
+      const panelMat = new THREE.MeshBasicMaterial({ map: label.texture, transparent: true, side: THREE.DoubleSide, depthWrite: false });
+      this.levelDisposables.push(label, panelGeo, panelMat);
       const panel = new THREE.Mesh(panelGeo, panelMat);
       panel.position.set(gd.x, 1.45, gd.z);
       row.group.add(panel);
@@ -259,13 +285,13 @@ class Game {
         post.position.set(gd.x + edge * gd.width / 2, 1.5, gd.z);
         row.group.add(post);
       }
-      row.gates.push({ x: gd.x, width: gd.width, value: gd.value, panel });
+      row.gates.push({ x: gd.x, width: gd.width, value: gd.value, panel, label, charge: 0, gained: 0, cd: 0, pulse: 0 });
     }
     for (const row of this.rows) this.levelRoot.add(row.group);
 
     // Enemies
     this.enemies = L.enemies.map((e) => ({
-      x: e.x, z: e.z, hp: e.hp, maxHp: e.hp, brute: e.brute, alive: true, active: false,
+      x: e.x, z: e.z, hp: e.hp, maxHp: e.hp, brute: e.brute, mini: e.mini, alive: true, active: false,
       flash: 0, phase: Math.random() * 6.28, yaw: 0,
     }));
 
@@ -405,7 +431,16 @@ class Game {
     this.squadZ -= TRACK.RUN_SPEED * dt;
     // Gates
     for (const row of this.rows) {
-      if (row.done || !(prevZ > row.z && this.squadZ <= row.z)) continue;
+      if (row.done) continue;
+      for (const g of row.gates) {           // hit cooldown + pulse animation
+        if (g.cd > 0) g.cd -= dt;
+        if (g.pulse > 0) {
+          g.pulse = Math.max(0, g.pulse - dt);
+          const k = 1 + g.pulse * 0.9;
+          g.panel.scale.set(k, k, 1);
+        }
+      }
+      if (!(prevZ > row.z && this.squadZ <= row.z)) continue;
       row.done = true;
       let best = row.gates[0], bestD = Infinity;
       for (const g of row.gates) {
@@ -520,30 +555,7 @@ class Game {
   // =========================================================================
   // Shooting
   // =========================================================================
-  /** Up to 6 nearest targets in front of the squad within weapon range (auto-aim). */
-  collectTargets(range) {
-    const T = this._targets || (this._targets = []);
-    T.length = 0;
-    const sx = this.squadX, sz = this.squadZ;
-    const consider = (x, z, w) => {
-      const dz = sz - z;                       // distance ahead (positive = in front)
-      if (dz < 0.5 || dz > range) return;
-      const dx = x - sx;
-      if (Math.abs(dx) > dz * 1.4 + 1.5) return; // outside the firing cone
-      const d = dx * dx + dz * dz * w;
-      if (T.length < 6) T.push({ x, z, d });
-      else {
-        let worst = 0;
-        for (let k = 1; k < 6; k++) if (T[k].d > T[worst].d) worst = k;
-        if (d < T[worst].d) { T[worst].x = x; T[worst].z = z; T[worst].d = d; }
-      }
-    };
-    for (const e of this.enemies) if (e.alive && e.active) consider(e.x, e.z, 1);
-    for (const b of this.barrels) if (b.alive) consider(b.x, b.z, 1.3);
-    if (this.boss.alive && this.state === 'boss') consider(this.boss.x, this.boss.z + 2, 1.6);
-    return T;
-  }
-
+  /** Every soldier fires STRAIGHT forward: no aim assist, no curving. */
   updateShooting(dt) {
     if (this.count <= 0 || this.visible === 0) return;
     const W = WEAPON_TIERS[this.tier];
@@ -557,20 +569,14 @@ class Game {
     if (!shots) return;
     const life = W.range / W.speed;
     const lim = TRACK.HALF_WIDTH - 0.3;
-    const targets = this.collectTargets(W.range * 0.95);
     while (shots-- > 0) {
       const i = (Math.random() * this.visible) | 0;
       const x = clamp(this.squadX + this.sx[i], -lim, lim) + 0.14;
       const z = this.squadZ + this.sz[i] - 0.9;
-      let aim = 0;
-      if (targets.length) {
-        const t = targets[(Math.random() * targets.length) | 0];
-        aim = clamp(Math.atan2(t.x - x, z - t.z), -0.9, 0.9);
-      }
       for (let p = 0; p < W.pellets; p++) {
-        const fan = W.pellets > 1 ? (p / (W.pellets - 1) - 0.5) * 2 * W.spread : 0;
-        const a = aim + fan + (Math.random() - 0.5) * (W.pellets > 1 ? 0.08 : W.spread * 2);
-        this.bullets.spawn(x, 0.78, z, Math.sin(a) * W.speed, -Math.cos(a) * W.speed,
+        // shotgun: a wall of parallel pellets side by side
+        const off = W.pellets > 1 ? (p / (W.pellets - 1) - 0.5) * W.width : 0;
+        this.bullets.spawn(x + off, 0.78, z, 0, -W.speed,
           life * (W.pellets > 1 ? rand(0.8, 1) : 1), W.damage * dmgMul, W.color, W.size);
       }
     }
@@ -598,6 +604,13 @@ class Game {
       this.damageBoss(dmg, bx, boss.z + 2.4);
       return true;
     }
+    // Gates: a bullet crossing a gate plane this frame changes the gate's value
+    for (const row of this.rows) {
+      if (row.done || !(az >= row.z && bz < row.z) || this.squadZ - row.z > GATE.ACTIVE_DIST) continue;
+      for (const g of row.gates) {
+        if (Math.abs(bx - g.x) <= g.width / 2) { this.hitGate(g, dmg, bx, row.z); return true; }
+      }
+    }
     // Barrels
     for (const b of this.barrels) {
       if (!b.alive || Math.abs(b.z - bz) > 4) continue;
@@ -611,7 +624,7 @@ class Game {
     // Enemies
     for (const e of this.enemies) {
       if (!e.alive || Math.abs(e.z - bz) > 4) continue;
-      const r = e.brute ? 0.85 : 0.55;
+      const r = e.mini ? 1.25 : e.brute ? 0.85 : 0.55;
       if (dist2(e.x, e.z) < r * r) {
         this.damageEnemy(e, dmg);
         return true;
@@ -620,12 +633,34 @@ class Game {
     return false;
   }
 
+  /** Bullets that hit a gate push its value up: −20 → −19 → … → 0 → +1 → … */
+  hitGate(g, dmg, bx, gz) {
+    const cost = GATE.POINT_COST + g.gained * GATE.POINT_GROWTH;
+    g.pulse = Math.max(g.pulse, 0.04);
+    g.charge = Math.min(g.charge + dmg, cost * 2);
+    if (g.cd > 0 || g.charge < cost) return;
+    g.charge -= cost;
+    g.cd = 1 / GATE.MAX_POINTS_PER_SEC;
+    g.gained++;
+    g.value += 1;
+    g.label.set(g.value);
+    g.pulse = 0.12;
+    this.particles.burst(bx, 1.2, gz, 2, g.value >= 0 ? [0x8ff0ff, 0xffffff] : [0xff9aa0, 0xffffff], 2.5, 0.5, 0.35);
+  }
+
   damageEnemy(e, dmg) {
     e.hp -= dmg;
     e.flash = 0.07;
     e.active = true;
     if (e.hp <= 0) {
       e.alive = false;
+      if (e.mini) {
+        for (let k = 0; k < 3; k++) this.particles.burst(e.x + rand(-0.8, 0.8), rand(0.8, 2.5), e.z, 18, [0xc2373a, 0x59616e, 0xffc23a, 0xfff04a], 7, 1.4, 0.9);
+        this.rings.spawn(e.x, e.z, 5, 0xffc23a, 0.5);
+        this.shake = Math.max(this.shake, 0.5);
+        this.hud.toast('MINI-BOSS DOWN!', 't1');
+        return;
+      }
       this.particles.burst(e.x, 0.8, e.z, e.brute ? 14 : 6, [0x7fbf4a, 0x9a2a2a, 0x4a3f36], e.brute ? 6 : 4.5, e.brute ? 1.3 : 0.9, 0.6);
     }
   }
@@ -640,22 +675,33 @@ class Game {
       if (!e.alive) continue;
       if (e.flash > 0) e.flash -= dt;
       if (!e.active) {
-        if (e.z > sz - ENEMY.ACTIVATE_DIST) e.active = true;
-        else continue;
+        if (e.z > sz - ENEMY.ACTIVATE_DIST) {
+          e.active = true;
+          if (e.mini) this.hud.toast('MINI-BOSS!', 'bad');
+        } else continue;
       }
       const dx = sx - e.x, dz = sz - e.z;
       const d = Math.hypot(dx, dz) || 1;
-      const sp = (e.brute ? ENEMY.BRUTE_SPEED : ENEMY.ZOMBIE_SPEED) * dt;
-      e.x += (dx / d) * sp;
-      e.z += (dz / d) * sp;
+      if (e.mini) {
+        // marches straight down the bridge, only drifting slowly toward the squad
+        e.z += ENEMY.MINI_SPEED * dt;
+        e.x += clamp(dx, -1, 1) * 0.35 * dt;
+      } else {
+        const sp = (e.brute ? ENEMY.BRUTE_SPEED : ENEMY.ZOMBIE_SPEED) * dt;
+        e.x += (dx / d) * sp * ENEMY.LATERAL_CHASE;
+        e.z += (dz / d) * sp;
+      }
       e.x = clamp(e.x, -TRACK.HALF_WIDTH + 0.4, TRACK.HALF_WIDTH - 0.4);
       e.yaw = Math.atan2(dx, dz);
       // contact with the crowd (elliptical footprint)
-      const ex = (e.x - sx) / rx, ez = (e.z - sz) / rz;
+      const pad = e.mini ? 0.9 : 0;
+      const ex = (e.x - sx) / (rx + pad), ez = (e.z - sz) / (rz + pad);
       if (ex * ex + ez * ez < 1) {
         e.alive = false;
-        this.particles.burst(e.x, 0.8, e.z, 8, [0x7fbf4a, 0x9a2a2a], 4, 1, 0.5);
-        this.loseSoldiers(e.brute ? 3 : 1, 'The zombie horde broke through.');
+        this.particles.burst(e.x, 0.8, e.z, e.mini ? 30 : 8, [0x7fbf4a, 0x9a2a2a, 0xc2373a], 4, 1, 0.5);
+        if (e.mini) this.shake = Math.max(this.shake, 0.6);
+        this.loseSoldiers(e.mini ? ENEMY.MINI_KILLS : e.brute ? 3 : 1,
+          e.mini ? 'The mini-boss trampled your squad.' : 'The zombie horde broke through.');
         if (this.state === 'lose') return;
       }
     }
@@ -702,25 +748,45 @@ class Game {
   }
 
   renderEnemies() {
-    const mesh = this.zombieMesh;
-    let n = 0;
+    const mesh = this.zombieMesh, miniMesh = this.miniMesh;
+    let n = 0, m = 0, bars = 0;
     const near = this.squadZ + 12, far = this.squadZ - 110;
     for (const e of this.enemies) {
-      if (!e.alive || e.z > near || e.z < far || n >= POOLS.ENEMIES) continue;
-      const ph = this.time * (e.active ? 11 : 3) + e.phase;
-      const sc = e.brute ? 1.65 : 1;
-      _v.set(e.x, e.active ? Math.abs(Math.sin(ph)) * 0.12 : 0, e.z);
-      _e.set(e.active ? 0.1 : 0, e.active ? e.yaw : Math.sin(ph * 0.5) * 0.3, Math.sin(ph) * (e.active ? 0.12 : 0.05));
+      if (!e.alive || e.z > near || e.z < far) continue;
+      const ph = this.time * (e.active ? (e.mini ? 6 : 11) : 3) + e.phase;
+      const sc = e.mini ? ENEMY.MINI_SCALE : e.brute ? 1.65 : 1;
+      const yaw = e.mini ? Math.atan2(this.squadX - e.x, 8) : e.yaw;
+      _v.set(e.x, e.active ? Math.abs(Math.sin(ph)) * (e.mini ? 0.18 : 0.12) : 0, e.z);
+      _e.set(e.active ? 0.1 : 0, e.active ? yaw : Math.sin(ph * 0.5) * 0.3, Math.sin(ph) * (e.active ? (e.mini ? 0.06 : 0.12) : 0.05));
       _q.setFromEuler(_e);
       _s.set(sc, sc, sc);
       _m.compose(_v, _q, _s);
+      if (e.mini) {
+        if (m >= 8) continue;
+        miniMesh.setMatrixAt(m, _m);
+        miniMesh.setColorAt(m, e.flash > 0 ? FLASH : WHITE);
+        m++;
+        if (bars < this.hpBars.length) {
+          const bar = this.hpBars[bars++];
+          bar.visible = true;
+          bar.position.set(e.x, 4.3, e.z);
+          bar.quaternion.copy(this.camera.quaternion);
+          bar.userData.fill.scale.x = 2.3 * Math.max(0, e.hp / e.maxHp);
+        }
+        continue;
+      }
+      if (n >= POOLS.ENEMIES) continue;
       mesh.setMatrixAt(n, _m);
       mesh.setColorAt(n, e.flash > 0 ? FLASH : e.brute ? BRUTE_TINT : WHITE);
       n++;
     }
+    for (let i = bars; i < this.hpBars.length; i++) this.hpBars[i].visible = false;
     mesh.count = n;
     mesh.instanceMatrix.needsUpdate = true;
     mesh.instanceColor.needsUpdate = true;
+    miniMesh.count = m;
+    miniMesh.instanceMatrix.needsUpdate = true;
+    miniMesh.instanceColor.needsUpdate = true;
   }
 
   renderBarrels() {
