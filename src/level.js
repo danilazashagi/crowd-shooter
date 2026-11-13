@@ -17,8 +17,10 @@ export function mulberry32(seed) {
 
 /**
  * Layout:
- *  gates:   [{ z, x, width, value }]  (gates sharing the same z form one row)
- *  rows:    [{ z, gateIdx: [...] }]
+ *  gates:   [{ z, value, row }]  (gates sharing the same z form one row)
+ *  rows:    [{ z, type: 'pair' | 'wall', divider, gateIdx: [...] }]
+ *           pair = left & right gate sharing one movable wall at X = divider
+ *           wall = one gate spanning the whole bridge (cannot be walked around)
  *  enemies: [{ x, z, hp, brute, mini }]
  *  bossZ, length
  */
@@ -33,15 +35,15 @@ export function generateLevel(level) {
   let lastWasGate = false;
   let step = 0;
 
-  const addRow = (defs) => {
-    const row = { z, gateIdx: [] };
-    for (const d of defs) {
+  const addRow = (type, values, divider = 0) => {
+    const row = { z, type, divider, gateIdx: [] };
+    for (const v of values) {
       row.gateIdx.push(out.gates.length);
-      const value = Math.min(GATE.MAX_PLUS, d.value);
-      out.gates.push({ z, x: d.x, width: d.width, value, row: out.rows.length });
+      out.gates.push({ z, value: Math.min(GATE.MAX_PLUS, v), row: out.rows.length });
     }
     out.rows.push(row);
   };
+  let walls = 0;
 
   const addWave = (p, centerX = 0, spreadX = W - 0.8) => {
     const n = P.waveSize(p);
@@ -73,25 +75,28 @@ export function generateLevel(level) {
     // Alternate gates with combat, with some variety.
     const r = rnd();
     if (!lastWasGate || r < 0.25) {
-      if (p > 0.15 && rnd() < 0.4) {
-        // RISK ROW: a narrow (2u) bonus, flanked by minus gates and guarded by a pair of
-        // armoured mutants standing right in front of it. Position varies so idling never pays.
+      const lastRow = out.rows[out.rows.length - 1];
+      const wallOk = p > 0.2 && walls < P.maxWalls && !(lastRow && lastRow.type === 'wall');
+      const wantWall = wallOk && (rnd() < 0.3 || (walls === 0 && p > 0.45));
+      if (wantWall) {
+        // FULL-WIDTH WALL: one red gate across the whole bridge. Shoot it down from afar.
+        walls++;
+        addRow('wall', [-P.wallValue(p)]);
+      } else if (p > 0.15 && rnd() < 0.4) {
+        // RISK PAIR: a narrow (2.5u) big bonus squeezed against a wide minus gate,
+        // guarded by two armoured mutants. Shooting the bonus pushes the wall open.
         const big = Math.min(GATE.MAX_PLUS, base * 2 + Math.round(rnd() * base * 0.5));
-        const side = Math.max(2, Math.round(base * (0.5 + rnd() * 0.5)));
-        const narrow = 2.0;
-        const cx = pick([-2.9, 0, 2.9]);
-        const leftW = cx - narrow / 2 + W, rightW = W - (cx + narrow / 2);
-        addRow([
-          { x: -W + leftW / 2, width: leftW, value: -side },
-          { x: cx, width: narrow, value: big },
-          { x: W - rightW / 2, width: rightW, value: -(side + Math.round(rnd() * 2)) },
-        ]);
+        const minus = -Math.max(2, Math.round(base * (0.6 + rnd() * 0.6)));
+        const plusLeft = rnd() < 0.5;
+        const divider = plusLeft ? -W + 2.5 : W - 2.5;
+        addRow('pair', plusLeft ? [big, minus] : [minus, big], divider);
+        const cx = plusLeft ? -W + 1.25 : W - 1.25;
         const hp = P.zombieHp(p) * 6;
-        for (const dx of [-0.6, 0.6]) {
-          out.enemies.push({ x: Math.max(-W + 0.8, Math.min(W - 0.8, cx + dx)), z: z + 7, hp, brute: true, mini: false });
+        for (const dx of [-0.5, 0.5]) {
+          out.enemies.push({ x: cx + dx, z: z + 7, hp, brute: true, mini: false });
         }
       } else {
-        // CHOICE ROW: two halves.
+        // CHOICE PAIR: two halves sharing the movable wall in the middle.
         // the first two rows are a gentle tutorial: both options are positive
         const variant = out.rows.length < 2 ? 'plusplus' : pick(['plusplus', 'plusminus', 'plusminus', 'minusminus']);
         let a, b;
@@ -100,17 +105,14 @@ export function generateLevel(level) {
           b = Math.max(1, Math.round(base * (0.3 + rnd() * 0.4)));
         } else if (variant === 'plusminus') {
           a = base + Math.round(rnd() * base * 0.6);
-          b = -Math.max(1, Math.round(base * (p < 0.25 ? 0.25 + rnd() * 0.25 : 0.4 + rnd() * 0.6)));
+          b = -Math.max(1, Math.round(base * (p < 0.25 ? 0.3 + rnd() * 0.3 : 0.5 + rnd() * 0.7)));
         } else {
           // "lesser evil" – only when the player should already have a decent squad
           if (p < 0.3) { a = base; b = -Math.max(1, Math.round(base * 0.5)); }
           else { a = -Math.max(1, Math.round(base * 0.25)); b = -Math.max(2, Math.round(base * 0.8)); }
         }
         if (rnd() < 0.5) [a, b] = [b, a];
-        addRow([
-          { x: -W / 2, width: W, value: a },
-          { x: W / 2, width: W, value: b },
-        ]);
+        addRow('pair', [a, b], 0);
       }
       lastWasGate = true;
     } else {

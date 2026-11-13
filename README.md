@@ -10,13 +10,19 @@ python3 -m http.server 8080
 Open http://localhost:8080 (add `?debug` for an FPS counter and `window.__game`).
 
 ## Rules
-- Gates are **only `+N` / `−N`** with gentle values (+2 … +10; narrow risk gates up to +20).
-  Risk rows offer a narrow 2-unit gate flanked by minus gates and guarded by two armoured mutants.
-- **Gates are shootable, each on its own**: every gate has an independent hitbox (its slot on the
-  bridge at the gate's Z plane). A bullet changes only the gate it physically passes through
-  (`−5 → −4 → … → 0 → +1`), from up to 40 units away. That gate's frame lerps smoothly to a bigger
-  target size inside its own slot, with a springy "boing" and a white flash on hits. Steps get pricier
-  and are capped at 3/s per gate. Bullets that hit a gate are absorbed: firepower vs. better math.
+- Gates are **only `+N` / `−N`** with gentle values (+2 … +10; narrow risk bonuses up to +20).
+- **Tug-of-war pairs**: two gates stand edge to edge across the bridge and share one glowing wall
+  (`dividerX`). Hitboxes follow the live wall position. Every point scored on a gate gives it +1 and
+  pushes the wall toward the neighbour. Shooting a **plus** gate also drags a **minus** neighbour
+  toward zero (`−20 → −19 …`); when it reaches 0 (or is squeezed flat) it is crushed off the bridge
+  and the plus gate takes the full width. Shooting a minus gate shrinks its minus (then turns it
+  plus) and pushes the wall back. Risk rows start with a narrow +bonus squeezed against a wide
+  minus, guarded by two armoured mutants.
+- **Full-width walls**: a single red gate spanning the bridge (−10 … −25 by level/progress). It
+  can't be avoided — shoot it down from afar, enough fire turns it positive.
+- Gates react from up to 40 units away; points get pricier and are rate-limited. The wall, widths
+  and labels move with `THREE.MathUtils.lerp` on delta time, plus a springy hit pop and white flash.
+  Bullets that hit a gate are absorbed: firepower vs. better math.
 - **No aim assist**: every soldier fires straight forward; shotguns fire a wall of parallel pellets.
   You aim by steering the squad.
 - **Squad size picks the weapon**: 1–9 pistols · 10–24 assault rifles · 25–49 shotguns · 50+ plasma miniguns.

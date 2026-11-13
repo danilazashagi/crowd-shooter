@@ -70,26 +70,37 @@ export const ENEMY = {
   CONTACT_PAD: 0.55,
 };
 
-// Shootable gates: every gate has its OWN fixed hitbox (its slot on the bridge, X range at the
-// gate's Z plane). A bullet that crosses that plane inside the slot changes ONLY that gate:
-// −20 → −19 → … → +1 … Each next step costs more damage (POINT_COST + gained * POINT_GROWTH)
-// and is capped at MAX_POINTS_PER_SEC per gate, so a huge squad cannot farm unlimited soldiers.
+// Shootable gates ("tug-of-war"):
+//  * PAIR rows: left + right gate stand edge to edge across the bridge and share ONE movable wall
+//    at X = dividerX. Hitboxes follow the live dividerX: [-W, dividerX) and [dividerX, W].
+//    - a point scored on a gate: that gate +1 and the wall is pushed toward the neighbour
+//      (the shot gate widens);
+//    - if the shot gate was PLUS and the neighbour is MINUS, the neighbour also moves +1 toward 0;
+//      when it reaches 0 (or is squeezed to MIN_WIDTH) it is crushed and vanishes, and the plus gate
+//      takes the whole bridge.
+//  * WALL rows: one minus gate across the whole bridge; every point is +1 (−20 → −19 → … → +1).
+// Each point costs damage (POINT_COST + gained * growth) and is rate-limited per gate.
 export const GATE = {
   POINT_COST: 1.5,
   POINT_GROWTH: 0.6,
+  WALL_POINT_GROWTH: 0.2,   // full-width walls stay convertible for smaller squads
   MAX_POINTS_PER_SEC: 3,
-  ACTIVE_DIST: 40,        // bullets change gates from far away, so the effect is visible early
-  MAX_PLUS: 20,           // no gate is generated above +20
-  // --- visuals: the frame grows inside its own slot (never into the neighbour) ---------
-  GROW_PER_POINT: 0.03,   // target size += this per point gained
-  MAX_GROW: 1.45,         // target size cap (height); width reaches the full slot at the cap
-  MIN_VISUAL: 0.84,       // frame width share of its slot at size 1
-  SIZE_SHARPNESS: 8,      // lerp speed toward the target size (1/s, exp. smoothing)
-  SPRING_K: 260,          // hit "boing": spring stiffness
-  SPRING_DAMP: 13,        //               damping
-  HIT_IMPULSE: 0.35,      // velocity kick for every bullet that hits
-  POINT_IMPULSE: 2.2,     // velocity kick when the number changes
-  FLASH_TIME: 0.12,       // white flash on hit
+  WALL_POINTS_PER_SEC: 5,
+  ACTIVE_DIST: 40,          // bullets change gates from far away, so the effect is visible early
+  MAX_PLUS: 20,             // no gate is generated above +20
+  DIVIDER_STEP: 0.3,        // wall shift per point (world units)
+  MIN_WIDTH: 0.9,           // a minus gate squeezed to this width is crushed; a plus gate stops here
+  DIVIDER_SHARPNESS: 9,     // lerp speed of the wall (1/s, exponential, dt-based)
+  FADE_SHARPNESS: 10,       // crushed gate fade-out speed
+  // --- per-gate height/spring feedback -------------------------------------------------
+  GROW_PER_POINT: 0.025,    // target height += this per point gained
+  MAX_GROW: 1.4,
+  SIZE_SHARPNESS: 8,
+  SPRING_K: 260,
+  SPRING_DAMP: 13,
+  HIT_IMPULSE: 0.35,
+  POINT_IMPULSE: 2.2,
+  FLASH_TIME: 0.12,
 };
 
 export const POOLS = {
@@ -112,6 +123,9 @@ export function levelParams(level) {
     miniHp: (p) => Math.round(250 + p * 800 + g * 1000),
     miniChance: (p) => (p > 0.2 ? 0.6 + l * 0.05 : 0),   // mini-bosses are frequent
     minMinis: 2 + Math.min(2, l),
+    // full-width minus wall: −10 … −25 depending on progress and level
+    wallValue: (p) => Math.min(25, Math.round(9 + p * 6 + t * 3 + g * 2)),
+    maxWalls: 1 + Math.min(2, l),
     bruteChance: (p) => (p > 0.35 ? 0.08 + p * 0.12 + l * 0.02 : 0),
     // gentle growth: +2 … +10 on normal gates, risky narrow gates up to GATE.MAX_PLUS
     gateBase: (p) => Math.round(2 + p * 7 + l * 0.6),

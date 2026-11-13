@@ -266,34 +266,56 @@ class Game {
     }
     this.levelRoot.add(pylons);
 
-    // Gates: every gate = translucent panel + two neon posts + number label.
-    // Hitbox = the gate's fixed slot [x0, x1] on the bridge; the visual frame animates inside it.
-    this.rows = L.rows.map((r) => ({ z: r.z, done: false, gates: [], group: new THREE.Group() }));
+    // Gates. PAIR rows: two gates edge to edge sharing one movable wall (dividerX).
+    // WALL rows: a single gate across the whole bridge. Every gate = translucent panel + label;
+    // posts belong to the row (left edge, right edge, shared divider).
+    const W = TRACK.HALF_WIDTH;
+    this.rows = L.rows.map((r) => {
+      const row = {
+        z: r.z, type: r.type, done: false, gates: [], group: new THREE.Group(),
+        dividerX: r.type === 'pair' ? r.divider : W, dividerTarget: r.type === 'pair' ? r.divider : W,
+      };
+      const mk = () => {
+        const m = new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true });
+        this.levelDisposables.push(m);
+        const mesh = new THREE.Mesh(this.gatePostGeo, m);
+        mesh.position.z = r.z;
+        row.group.add(mesh);
+        return mesh;
+      };
+      row.postL = mk(); row.postR = mk();
+      row.postL.position.x = -W + 0.06; row.postR.position.x = W - 0.06;
+      if (r.type === 'pair') {
+        row.postMid = mk();
+        row.postMid.material.color.setHex(0xeaf6ff);   // the shared wall glows white
+        row.postMid.scale.x = 1.4;
+      }
+      return row;
+    });
     for (const gd of L.gates) {
       const row = this.rows[gd.row];
       const label = new GateLabel(gd.value);
-      const panelMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false });
-      const postMat = new THREE.MeshBasicMaterial({ toneMapped: false });
+      const panelMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false });
       const labelMat = new THREE.MeshBasicMaterial({ map: label.texture, transparent: true, depthWrite: false });
-      this.levelDisposables.push(label, panelMat, postMat, labelMat);
+      this.levelDisposables.push(label, panelMat, labelMat);
       const panel = new THREE.Mesh(this.gatePanelGeo, panelMat);
-      const postL = new THREE.Mesh(this.gatePostGeo, postMat);
-      const postR = new THREE.Mesh(this.gatePostGeo, postMat);
       const text = new THREE.Mesh(this.gateLabelGeo, labelMat);
       text.renderOrder = 2;
-      for (const o of [panel, postL, postR, text]) { o.position.z = gd.z; row.group.add(o); }
+      panel.position.z = gd.z;
+      row.group.add(panel, text);
       const g = {
-        x: gd.x, width: gd.width, x0: gd.x - gd.width / 2, x1: gd.x + gd.width / 2,
-        value: gd.value, startValue: gd.value, charge: 0, gained: 0, cd: 0,
-        size: 1, targetSize: 1, spring: 0, springV: 0,
-        panel, postL, postR, text, label, panelMat, postMat, flash: 0, sign: 0,
+        value: gd.value, alive: true, fade: 1, side: row.gates.length,   // side 0 = left, 1 = right
+        x0: 0, x1: 0, x: 0, width: 0, vx0: 0, vx1: 0,                    // hitbox / visual ranges
+        charge: 0, gained: 0, cd: 0, size: 1, targetSize: 1, spring: 0, springV: 0, flash: 0, sign: 0,
+        panel, text, label, panelMat, labelMat,
       };
       this._paintGate(g);
       row.gates.push(g);
     }
     for (const row of this.rows) {
       this.levelRoot.add(row.group);
-      for (const g of row.gates) this._placeGate(g, row.z);
+      this._updateRowRanges(row);
+      this._placeRow(row);
     }
 
     // Enemies
@@ -441,11 +463,10 @@ class Game {
     for (const row of this.rows) {
       if (row.done || !(prevZ > row.z && this.squadZ <= row.z)) continue;
       row.done = true;
-      let best = row.gates[0], bestD = Infinity;
-      for (const g of row.gates) {
-        const d = Math.abs(this.squadX - g.x) - g.width / 2;
-        if (d < bestD) { bestD = d; best = g; }
-      }
+      // the squad centre decides: which living gate's range contains it (ranges follow dividerX)
+      let best = null;
+      for (const g of row.gates) if (g.alive && this.squadX >= g.x0 && this.squadX <= g.x1) best = g;
+      if (!best) best = row.gates.find((g) => g.alive);
       this.applyGate(best, row);
     }
     // Arrive at the boss arena
@@ -457,57 +478,106 @@ class Game {
     }
   }
 
-  /** Colour a gate by sign: cyan neon for plus, magenta/red for minus. */
+  /** Colour a gate by sign: blue panel for plus, red for minus. */
   _paintGate(g) {
     const sign = g.value >= 0 ? 1 : -1;
     if (sign === g.sign) return;
     g.sign = sign;
     g.baseColor = new THREE.Color(sign > 0 ? 0x1e7bff : 0xff2448);
     g.panelMat.color.copy(g.baseColor);
-    g.postMat.color.setHex(sign > 0 ? 0x5ff4ff : 0xff4fd8);
   }
 
-  /** Position the gate meshes inside the gate's own slot from its animated size. */
-  _placeGate(g, z) {
-    const s = g.size + g.spring;                       // smooth size + spring impulse
-    const grow = clamp((g.size - 1) / (GATE.MAX_GROW - 1), 0, 1);
-    const w = g.width * (GATE.MIN_VISUAL + (1 - GATE.MIN_VISUAL) * grow) * (1 + g.spring * 0.25);
-    const half = Math.min(w, g.width) / 2;             // never spill into the neighbour's slot
-    g.panel.position.x = g.x;
-    g.panel.scale.set(half * 2 - 0.16, s, 1);
-    g.postL.position.x = g.x - half + 0.06;
-    g.postR.position.x = g.x + half - 0.06;
-    g.postL.scale.y = g.postR.scale.y = s;
-    const lw = Math.min(half * 2 * 0.98, 3.8) * (1 + g.spring * 0.6);
-    g.text.position.set(g.x, 1.35 * s, z + 0.03);
-    g.text.scale.set(lw, lw, 1);
+  /** The other (living) gate of a pair row, or null. */
+  _neighbour(row, g) {
+    if (row.type !== 'pair') return null;
+    const o = row.gates[1 - g.side];
+    return o && o.alive ? o : null;
   }
 
   /**
-   * dt-driven gate animation, per gate:
-   *  - size lerps toward targetSize (THREE.MathUtils.lerp with exponential factor),
-   *  - a damped spring adds a soft "boing" on hits (sub-stepped for stability),
-   *  - white flash fades out.
+   * Hitbox ranges from the LIVE dividerX: left [-W, dividerX), right [dividerX, W].
+   * A crushed neighbour hands its space over immediately.
+   */
+  _updateRowRanges(row) {
+    const W = TRACK.HALF_WIDTH;
+    for (const g of row.gates) {
+      if (row.type === 'wall') { g.x0 = -W; g.x1 = W; continue; }
+      const other = row.gates[1 - g.side];
+      const full = !other.alive;
+      if (g.side === 0) { g.x0 = -W; g.x1 = full ? W : row.dividerX; }
+      else { g.x0 = full ? -W : row.dividerX; g.x1 = W; }
+      g.x = (g.x0 + g.x1) / 2;
+      g.width = g.x1 - g.x0;
+    }
+    if (row.type === 'wall') { const g = row.gates[0]; g.x = 0; g.width = 2 * W; }
+  }
+
+  /** Lay out meshes: panels span [vx0, vx1] (smoothed), labels centred in each half. */
+  _placeRow(row) {
+    const W = TRACK.HALF_WIDTH;
+    const [a, b] = row.gates;
+    for (const g of row.gates) {
+      // visual edges follow the smoothed divider; a dying gate collapses toward its edge
+      if (row.type === 'wall') { g.vx0 = -W; g.vx1 = W; }
+      else if (g.side === 0) { g.vx0 = -W; g.vx1 = row.dividerX; }
+      else { g.vx0 = row.dividerX; g.vx1 = W; }
+      const w = Math.max(0, g.vx1 - g.vx0);
+      const s = g.size + g.spring;
+      g.panel.visible = g.text.visible = g.fade > 0.02 && w > 0.05;
+      g.panel.position.x = (g.vx0 + g.vx1) / 2;
+      g.panel.scale.set(Math.max(0.01, w - 0.14), s, 1);
+      const lw = Math.min(w * 0.96, 3.8) * (1 + g.spring * 0.6);
+      g.text.position.set(g.panel.position.x, 1.35 * s, row.z + 0.03);
+      g.text.scale.set(Math.max(0.01, lw), Math.max(0.01, lw), 1);
+      g.labelMat.opacity = g.fade;
+    }
+    // posts: edges take the colour of the gate touching them, the shared wall sits at dividerX
+    const left = row.type === 'wall' || a.alive || !b ? a : b;
+    const right = row.type === 'wall' ? a : (b && b.alive ? b : a);
+    const neon = (g) => (g.value >= 0 ? 0x5ff4ff : 0xff4fd8);
+    row.postL.material.color.setHex(neon(left));
+    row.postR.material.color.setHex(neon(right));
+    row.postL.scale.y = left.size + left.spring;
+    row.postR.scale.y = right.size + right.spring;
+    if (row.postMid) {
+      const show = a.alive && b.alive ? 1 : Math.min(a.fade, b.fade);
+      row.postMid.visible = show > 0.02;
+      row.postMid.material.opacity = show;
+      row.postMid.position.x = row.dividerX;
+      row.postMid.scale.y = Math.max(a.size + a.spring, b.size + b.spring) * 1.05;
+    }
+  }
+
+  /**
+   * Per-frame, dt-driven gate animation:
+   *  - dividerX lerps toward dividerTarget (THREE.MathUtils.lerp, exponential factor),
+   *  - every gate's height lerps toward targetSize, a damped spring adds the hit "boing",
+   *  - flashes fade, crushed gates fade out.
    */
   updateGates(dt) {
-    const lerpK = 1 - Math.exp(-GATE.SIZE_SHARPNESS * dt);
+    const kDiv = 1 - Math.exp(-GATE.DIVIDER_SHARPNESS * dt);
+    const kSize = 1 - Math.exp(-GATE.SIZE_SHARPNESS * dt);
+    const kFade = 1 - Math.exp(-GATE.FADE_SHARPNESS * dt);
     const steps = Math.max(1, Math.ceil(dt / 0.016));
     const h = dt / steps;
     for (const row of this.rows) {
       if (row.z > this.squadZ + 15 || row.z < this.squadZ - 120) continue;
+      row.dividerX = THREE.MathUtils.lerp(row.dividerX, row.dividerTarget, kDiv);
       for (const g of row.gates) {
         if (g.cd > 0) g.cd -= dt;
         if (g.flash > 0) g.flash = Math.max(0, g.flash - dt);
-        g.size = THREE.MathUtils.lerp(g.size, g.targetSize, lerpK);
+        g.size = THREE.MathUtils.lerp(g.size, g.targetSize, kSize);
+        g.fade = THREE.MathUtils.lerp(g.fade, g.alive ? 1 : 0, kFade);
         for (let i = 0; i < steps; i++) {
           g.springV += (-GATE.SPRING_K * g.spring - GATE.SPRING_DAMP * g.springV) * h;
           g.spring += g.springV * h;
         }
         const f = g.flash / GATE.FLASH_TIME;
         g.panelMat.color.copy(g.baseColor).lerp(WHITE, f * 0.85);
-        g.panelMat.opacity = (row.done ? (g.chosen ? 0.12 : 0.3) : 0.6) + f * 0.3;
-        this._placeGate(g, row.z);
+        g.panelMat.opacity = ((row.done ? (g.chosen ? 0.12 : 0.3) : 0.6) + f * 0.3) * g.fade;
       }
+      this._updateRowRanges(row);
+      this._placeRow(row);
     }
   }
 
@@ -664,7 +734,7 @@ class Game {
       const t = (az - row.z) / (az - bz || 1e-6);          // fraction of the step at the plane
       const cx = ax + (bx - ax) * t;
       for (const g of row.gates) {
-        if (cx >= g.x0 && cx < g.x1) { this.hitGate(g, dmg, cx, row.z); return true; }
+        if (g.alive && cx >= g.x0 && cx < g.x1) { this.hitGate(row, g, dmg, cx); return true; }
       }
     }
     // Enemies
@@ -679,23 +749,57 @@ class Game {
     return false;
   }
 
-  /** A bullet hit this gate (and only this gate): charge it, step its number, animate it. */
-  hitGate(g, dmg, bx, gz) {
-    g.flash = Math.max(g.flash, GATE.FLASH_TIME * 0.6);
-    g.springV += GATE.HIT_IMPULSE;
-    const cost = GATE.POINT_COST + g.gained * GATE.POINT_GROWTH;
-    g.charge = Math.min(g.charge + dmg, cost * 2);
-    if (g.cd > 0 || g.charge < cost) return;
-    g.charge -= cost;
-    g.cd = 1 / GATE.MAX_POINTS_PER_SEC;
-    g.gained++;
+  /** Step a gate's number by +1 and give it visual feedback. */
+  _bumpGate(g, impulse) {
     g.value += 1;
+    g.gained++;
     g.label.set(g.value);
     this._paintGate(g);
     g.flash = GATE.FLASH_TIME;
     g.targetSize = clamp(1 + g.gained * GATE.GROW_PER_POINT, 1, GATE.MAX_GROW);
-    g.springV += GATE.POINT_IMPULSE * (g.value === 0 ? 1.6 : 1);   // extra boing when − flips to +
-    this.particles.burst(bx, 1.4, gz, 3, g.value >= 0 ? [0x8ff0ff, 0xffffff] : [0xff9ad8, 0xffffff], 3, 0.5, 0.35);
+    g.springV += impulse * (g.value === 0 ? 1.6 : 1);   // extra boing when − flips to +
+  }
+
+  /**
+   * A bullet hit gate `g` (inside its live hitbox). Damage charges the gate; each point:
+   *  - g +1 and widens: the shared wall is pushed toward the neighbour;
+   *  - if g was PLUS and the neighbour is MINUS, the neighbour also moves +1 toward zero,
+   *    and is crushed (vanishes) once it reaches 0 or is squeezed to MIN_WIDTH.
+   */
+  hitGate(row, g, dmg, bx) {
+    g.flash = Math.max(g.flash, GATE.FLASH_TIME * 0.6);
+    g.springV += GATE.HIT_IMPULSE;
+    const wall = row.type === 'wall';
+    const cost = GATE.POINT_COST + g.gained * (wall ? GATE.WALL_POINT_GROWTH : GATE.POINT_GROWTH);
+    g.charge = Math.min(g.charge + dmg, cost * 2);
+    if (g.cd > 0 || g.charge < cost) return;
+    g.charge -= cost;
+    g.cd = 1 / (wall ? GATE.WALL_POINTS_PER_SEC : GATE.MAX_POINTS_PER_SEC);
+    const wasPlus = g.value > 0;
+    this._bumpGate(g, GATE.POINT_IMPULSE);
+    this.particles.burst(bx, 1.4, row.z, 3, g.value >= 0 ? [0x8ff0ff, 0xffffff] : [0xff9ad8, 0xffffff], 3, 0.5, 0.35);
+
+    const other = this._neighbour(row, g);
+    if (!other) return;
+    // push the shared wall toward the neighbour
+    const W = TRACK.HALF_WIDTH;
+    const dir = g.side === 0 ? 1 : -1;
+    const lo = -W + GATE.MIN_WIDTH, hi = W - GATE.MIN_WIDTH;
+    row.dividerTarget = clamp(row.dividerTarget + dir * GATE.DIVIDER_STEP, lo, hi);
+    if (wasPlus && other.value < 0) {
+      this._bumpGate(other, GATE.POINT_IMPULSE * 0.6);
+      const squeezed = dir > 0 ? row.dividerTarget >= hi : row.dividerTarget <= lo;
+      if (other.value >= 0 || squeezed) this._crushGate(row, g, other);
+    }
+  }
+
+  /** The neighbour minus gate is pushed off the bridge: winner takes the full width. */
+  _crushGate(row, winner, loser) {
+    loser.alive = false;
+    row.dividerTarget = winner.side === 0 ? TRACK.HALF_WIDTH : -TRACK.HALF_WIDTH;
+    winner.springV += GATE.POINT_IMPULSE * 1.5;
+    this.particles.burst(loser.x, 1.4, row.z, 24, [0xff4fd8, 0xff2448, 0xffffff], 6, 0.9, 0.6);
+    this.rings.spawn(loser.x, row.z, 3, 0xff4fd8, 0.4);
   }
 
   damageEnemy(e, dmg) {
