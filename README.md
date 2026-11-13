@@ -12,16 +12,16 @@ Open http://localhost:8080 (add `?debug` for an FPS counter and `window.__game`)
 ## Rules
 - Gates are **only `+N` / `−N`** with gentle values (+2 … +10; narrow risk gates up to +20).
   Risk rows offer a narrow 2-unit gate flanked by minus gates and guarded by two armoured mutants.
-- **Gate rows are shootable**: bullets hitting any gate of a row push every gate of that row up one
-  step at a time (`+8/−5 → +9/−4 → … → +14/+1`), from up to 40 units away. The struck panel flashes white,
-  numbers pop, and the borders slide: a gate's width follows the size of its number, so a −N being
-  shot toward zero narrows while its neighbour widens. Steps get pricier and are capped at 2.5/s.
-  Bullets that hit a gate are absorbed, so you trade firepower against zombies for better math.
+- **Gates are shootable, each on its own**: every gate has an independent hitbox (its slot on the
+  bridge at the gate's Z plane). A bullet changes only the gate it physically passes through
+  (`−5 → −4 → … → 0 → +1`), from up to 40 units away. That gate's frame lerps smoothly to a bigger
+  target size inside its own slot, with a springy "boing" and a white flash on hits. Steps get pricier
+  and are capped at 3/s per gate. Bullets that hit a gate are absorbed: firepower vs. better math.
 - **No aim assist**: every soldier fires straight forward; shotguns fire a wall of parallel pellets.
   You aim by steering the squad.
 - **Squad size picks the weapon**: 1–9 pistols · 10–24 assault rifles · 25–49 shotguns · 50+ plasma miniguns.
 - **Mini-bosses** (armoured crimson juggernauts, 2.4× size) march straight down the bridge inside zombie waves, at least 2 per level. Each shows an exact `HP: 524 / 534` readout; the final boss bar shows `HP: 5939 / 8000`.
-- Zombies/mutant brutes rush the squad.
+- Zombies are fast (5.6 u/s), home in on the squad and sprint in the last 9 units — you have to shoot waves down, walking around them doesn't work.
 - **Difficulty curve**: level 2 only adds a little HP and wave size; from level 3 on the horde also gets +10% speed, +7% armour and more soldiers lost per contact each level.
 - At the end of the bridge, the Mecha-Zombie Tank: dodge lane slams (red zones) and cannon orbs (ground markers).
 

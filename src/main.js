@@ -267,10 +267,8 @@ class Game {
     this.levelRoot.add(pylons);
 
     // Gates: every gate = translucent panel + two neon posts + number label.
-    // Widths/positions are live (they slide as values change), see updateGates().
-    this.rows = L.rows.map((r) => ({
-      z: r.z, done: false, gates: [], group: new THREE.Group(), charge: 0, gained: 0, cd: 0,
-    }));
+    // Hitbox = the gate's fixed slot [x0, x1] on the bridge; the visual frame animates inside it.
+    this.rows = L.rows.map((r) => ({ z: r.z, done: false, gates: [], group: new THREE.Group() }));
     for (const gd of L.gates) {
       const row = this.rows[gd.row];
       const label = new GateLabel(gd.value);
@@ -285,13 +283,18 @@ class Game {
       text.renderOrder = 2;
       for (const o of [panel, postL, postR, text]) { o.position.z = gd.z; row.group.add(o); }
       const g = {
-        x: gd.x, width: gd.width, value: gd.value, baseWidth: gd.width,
-        panel, postL, postR, text, label, panelMat, postMat, flash: 0, pop: 0, sign: 0,
+        x: gd.x, width: gd.width, x0: gd.x - gd.width / 2, x1: gd.x + gd.width / 2,
+        value: gd.value, startValue: gd.value, charge: 0, gained: 0, cd: 0,
+        size: 1, targetSize: 1, spring: 0, springV: 0,
+        panel, postL, postR, text, label, panelMat, postMat, flash: 0, sign: 0,
       };
       this._paintGate(g);
       row.gates.push(g);
     }
-    for (const row of this.rows) { this.levelRoot.add(row.group); this._layoutRow(row, 1); }
+    for (const row of this.rows) {
+      this.levelRoot.add(row.group);
+      for (const g of row.gates) this._placeGate(g, row.z);
+    }
 
     // Enemies
     this.enemies = L.enemies.map((e) => ({
@@ -464,59 +467,47 @@ class Game {
     g.postMat.color.setHex(sign > 0 ? 0x5ff4ff : 0xff4fd8);
   }
 
-  /**
-   * Slide the borders of a row: each gate's share of the bridge width follows the magnitude
-   * of its number, so a shrinking −N narrows and its neighbour widens. `k` = smoothing (1 = snap).
-   */
-  _layoutRow(row, k) {
-    const total = TRACK.HALF_WIDTH * 2;
-    let sum = 0;
-    for (const g of row.gates) {
-      g.weight = g.baseWidth * (GATE.WEIGHT_BIAS + Math.abs(g.value));
-      sum += g.weight;
-    }
-    // target widths with a minimum width, then smooth toward them
-    let fixed = 0, free = 0;
-    for (const g of row.gates) {
-      g.target = (g.weight / sum) * total;
-      if (g.target < GATE.MIN_WIDTH) { g.target = GATE.MIN_WIDTH; fixed += GATE.MIN_WIDTH; } else free += g.target;
-    }
-    const scale = (total - fixed) / (free || 1);
-    for (const g of row.gates) if (g.target > GATE.MIN_WIDTH) g.target *= scale;
-    let x = -TRACK.HALF_WIDTH;
-    for (const g of row.gates) {
-      g.width += (g.target - g.width) * k;
-      g.x = x + g.width / 2;
-      x += g.width;
-    }
-    // apply to meshes
-    for (const g of row.gates) {
-      const popY = 1 + g.pop * 1.6;
-      g.panel.position.x = g.x;
-      g.panel.scale.set(g.width - 0.18, popY, 1);
-      g.postL.position.x = g.x - g.width / 2 + 0.06;
-      g.postR.position.x = g.x + g.width / 2 - 0.06;
-      g.postL.scale.y = g.postR.scale.y = popY;
-      const lw = Math.min(g.width * 0.98, 3.8) * (1 + g.pop * 1.4);
-      g.text.position.set(g.x, 1.35 * popY, row.z + 0.03);
-      g.text.scale.set(lw, lw, 1);
-    }
+  /** Position the gate meshes inside the gate's own slot from its animated size. */
+  _placeGate(g, z) {
+    const s = g.size + g.spring;                       // smooth size + spring impulse
+    const grow = clamp((g.size - 1) / (GATE.MAX_GROW - 1), 0, 1);
+    const w = g.width * (GATE.MIN_VISUAL + (1 - GATE.MIN_VISUAL) * grow) * (1 + g.spring * 0.25);
+    const half = Math.min(w, g.width) / 2;             // never spill into the neighbour's slot
+    g.panel.position.x = g.x;
+    g.panel.scale.set(half * 2 - 0.16, s, 1);
+    g.postL.position.x = g.x - half + 0.06;
+    g.postR.position.x = g.x + half - 0.06;
+    g.postL.scale.y = g.postR.scale.y = s;
+    const lw = Math.min(half * 2 * 0.98, 3.8) * (1 + g.spring * 0.6);
+    g.text.position.set(g.x, 1.35 * s, z + 0.03);
+    g.text.scale.set(lw, lw, 1);
   }
 
-  /** Smooth, dt-driven gate animation: sliding borders, white hit flash, number pop. */
+  /**
+   * dt-driven gate animation, per gate:
+   *  - size lerps toward targetSize (THREE.MathUtils.lerp with exponential factor),
+   *  - a damped spring adds a soft "boing" on hits (sub-stepped for stability),
+   *  - white flash fades out.
+   */
   updateGates(dt) {
-    const k = damp(GATE.LAYOUT_SHARPNESS, dt);
+    const lerpK = 1 - Math.exp(-GATE.SIZE_SHARPNESS * dt);
+    const steps = Math.max(1, Math.ceil(dt / 0.016));
+    const h = dt / steps;
     for (const row of this.rows) {
       if (row.z > this.squadZ + 15 || row.z < this.squadZ - 120) continue;
-      if (row.cd > 0) row.cd -= dt;
       for (const g of row.gates) {
+        if (g.cd > 0) g.cd -= dt;
         if (g.flash > 0) g.flash = Math.max(0, g.flash - dt);
-        if (g.pop > 0) g.pop = Math.max(0, g.pop - dt);
+        g.size = THREE.MathUtils.lerp(g.size, g.targetSize, lerpK);
+        for (let i = 0; i < steps; i++) {
+          g.springV += (-GATE.SPRING_K * g.spring - GATE.SPRING_DAMP * g.springV) * h;
+          g.spring += g.springV * h;
+        }
         const f = g.flash / GATE.FLASH_TIME;
         g.panelMat.color.copy(g.baseColor).lerp(WHITE, f * 0.85);
         g.panelMat.opacity = (row.done ? (g.chosen ? 0.12 : 0.3) : 0.6) + f * 0.3;
+        this._placeGate(g, row.z);
       }
-      if (!row.done) this._layoutRow(row, k);
     }
   }
 
@@ -666,11 +657,14 @@ class Game {
       this.damageBoss(dmg, bx, boss.z + 2.4);
       return true;
     }
-    // Gates: a bullet crossing a gate plane this frame changes the gate's value
+    // Gates: the bullet must cross the gate's Z plane this frame, and its X at the crossing
+    // must lie inside that gate's own slot [x0, x1). Only that one gate is affected.
     for (const row of this.rows) {
       if (row.done || !(az >= row.z && bz < row.z) || this.squadZ - row.z > GATE.ACTIVE_DIST) continue;
+      const t = (az - row.z) / (az - bz || 1e-6);          // fraction of the step at the plane
+      const cx = ax + (bx - ax) * t;
       for (const g of row.gates) {
-        if (Math.abs(bx - g.x) <= g.width / 2) { this.hitGateRow(row, g, dmg, bx); return true; }
+        if (cx >= g.x0 && cx < g.x1) { this.hitGate(g, dmg, cx, row.z); return true; }
       }
     }
     // Enemies
@@ -685,26 +679,23 @@ class Game {
     return false;
   }
 
-  /**
-   * A bullet hit any gate of a row: every gate of that row climbs by +1 per step
-   * (−20 → −19 …, +5 → +6 …). The struck gate flashes white on every bullet.
-   */
-  hitGateRow(row, g, dmg, bx) {
+  /** A bullet hit this gate (and only this gate): charge it, step its number, animate it. */
+  hitGate(g, dmg, bx, gz) {
     g.flash = Math.max(g.flash, GATE.FLASH_TIME * 0.6);
-    const cost = GATE.POINT_COST + row.gained * GATE.POINT_GROWTH;
-    row.charge = Math.min(row.charge + dmg, cost * 2);
-    if (row.cd > 0 || row.charge < cost) return;
-    row.charge -= cost;
-    row.cd = 1 / GATE.MAX_POINTS_PER_SEC;
-    row.gained++;
-    for (const o of row.gates) {
-      o.value += 1;
-      o.label.set(o.value);
-      this._paintGate(o);
-      o.flash = GATE.FLASH_TIME;
-      o.pop = o.value === 0 ? GATE.POP_TIME * 1.8 : GATE.POP_TIME;   // bigger pop when − flips to +
-    }
-    this.particles.burst(bx, 1.4, row.z, 3, g.value >= 0 ? [0x8ff0ff, 0xffffff] : [0xff9ad8, 0xffffff], 3, 0.5, 0.35);
+    g.springV += GATE.HIT_IMPULSE;
+    const cost = GATE.POINT_COST + g.gained * GATE.POINT_GROWTH;
+    g.charge = Math.min(g.charge + dmg, cost * 2);
+    if (g.cd > 0 || g.charge < cost) return;
+    g.charge -= cost;
+    g.cd = 1 / GATE.MAX_POINTS_PER_SEC;
+    g.gained++;
+    g.value += 1;
+    g.label.set(g.value);
+    this._paintGate(g);
+    g.flash = GATE.FLASH_TIME;
+    g.targetSize = clamp(1 + g.gained * GATE.GROW_PER_POINT, 1, GATE.MAX_GROW);
+    g.springV += GATE.POINT_IMPULSE * (g.value === 0 ? 1.6 : 1);   // extra boing when − flips to +
+    this.particles.burst(bx, 1.4, gz, 3, g.value >= 0 ? [0x8ff0ff, 0xffffff] : [0xff9ad8, 0xffffff], 3, 0.5, 0.35);
   }
 
   damageEnemy(e, dmg) {
@@ -743,7 +734,8 @@ class Game {
         e.z += ENEMY.MINI_SPEED * this.params.enemySpeedMul * dt;
         e.x += clamp(dx, -1, 1) * 0.35 * dt;
       } else {
-        const sp = (e.brute ? ENEMY.BRUTE_SPEED : ENEMY.ZOMBIE_SPEED) * this.params.enemySpeedMul * dt;
+        const lunge = d < ENEMY.LUNGE_DIST ? ENEMY.LUNGE_MUL : 1;   // final sprint at the squad
+        const sp = (e.brute ? ENEMY.BRUTE_SPEED : ENEMY.ZOMBIE_SPEED) * this.params.enemySpeedMul * lunge * dt;
         e.x += (dx / d) * sp * ENEMY.LATERAL_CHASE;
         e.z += (dz / d) * sp;
       }

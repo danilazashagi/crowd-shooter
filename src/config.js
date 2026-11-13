@@ -60,30 +60,36 @@ export function tierForCount(count) {
 
 export const ENEMY = {
   ACTIVATE_DIST: 58,      // enemies wake up when the squad is this close
-  ZOMBIE_SPEED: 3.6,
-  BRUTE_SPEED: 2.4,
+  ZOMBIE_SPEED: 5.6,      // fast runners: you cannot just walk around a wave
+  BRUTE_SPEED: 3.6,
   MINI_SPEED: 2.0,        // mini-boss marches straight down the bridge
   MINI_SCALE: 2.4,
-  LATERAL_CHASE: 0.55,    // share of sideways homing (bullets fly straight, so zombies must be dodgeable)
+  LATERAL_CHASE: 0.9,     // share of sideways homing toward the squad
+  LUNGE_DIST: 9,          // within this distance zombies sprint at the squad
+  LUNGE_MUL: 1.35,
   CONTACT_PAD: 0.55,
 };
 
-// Shootable gate rows: bullets that hit ANY gate of a row add +1 to EVERY gate of that row
-// (+17/−25 → +18/−24 → …). Each next step costs more damage (POINT_COST + gained * POINT_GROWTH)
-// and is capped at MAX_POINTS_PER_SEC, so a huge squad cannot farm unlimited soldiers.
-// Borders slide: a gate's width follows the MAGNITUDE of its number, so as a −N gate is shot
-// toward zero it narrows and its neighbour widens (and it regrows once it turns positive).
+// Shootable gates: every gate has its OWN fixed hitbox (its slot on the bridge, X range at the
+// gate's Z plane). A bullet that crosses that plane inside the slot changes ONLY that gate:
+// −20 → −19 → … → +1 … Each next step costs more damage (POINT_COST + gained * POINT_GROWTH)
+// and is capped at MAX_POINTS_PER_SEC per gate, so a huge squad cannot farm unlimited soldiers.
 export const GATE = {
   POINT_COST: 1.5,
   POINT_GROWTH: 0.6,
-  MAX_POINTS_PER_SEC: 2.5,
+  MAX_POINTS_PER_SEC: 3,
   ACTIVE_DIST: 40,        // bullets change gates from far away, so the effect is visible early
   MAX_PLUS: 20,           // no gate is generated above +20
-  WEIGHT_BIAS: 6,         // width weight = baseWidth * (WEIGHT_BIAS + |value|)
-  MIN_WIDTH: 1.3,         // no gate gets narrower than this (world units)
-  LAYOUT_SHARPNESS: 7,    // smoothing of the sliding borders
+  // --- visuals: the frame grows inside its own slot (never into the neighbour) ---------
+  GROW_PER_POINT: 0.03,   // target size += this per point gained
+  MAX_GROW: 1.45,         // target size cap (height); width reaches the full slot at the cap
+  MIN_VISUAL: 0.84,       // frame width share of its slot at size 1
+  SIZE_SHARPNESS: 8,      // lerp speed toward the target size (1/s, exp. smoothing)
+  SPRING_K: 260,          // hit "boing": spring stiffness
+  SPRING_DAMP: 13,        //               damping
+  HIT_IMPULSE: 0.35,      // velocity kick for every bullet that hits
+  POINT_IMPULSE: 2.2,     // velocity kick when the number changes
   FLASH_TIME: 0.12,       // white flash on hit
-  POP_TIME: 0.16,         // vertical "pop" when the number changes
 };
 
 export const POOLS = {
