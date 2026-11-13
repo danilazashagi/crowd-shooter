@@ -50,7 +50,7 @@
       transition: width .12s linear; }
 
     #toast { top: 30%; left: 50%; transform: translate(-50%, -50%) scale(.6); opacity: 0;
-      font-size: clamp(26px, 6vw, 48px); text-align: center; white-space: nowrap;
+      font-size: clamp(26px, 6vw, 48px); text-align: center; width: max-content; max-width: 92vw;
       text-shadow: 0 4px 0 rgba(0,0,0,.35), 0 0 22px rgba(255,255,255,.5); transition: all .25s ease-out; }
     #toast.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
     #toast.t1 { color: #ffb36b; } #toast.t2 { color: #fff0c0; } #toast.t3 { color: #6ff7ff; }

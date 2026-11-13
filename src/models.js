@@ -140,17 +140,6 @@ export function makeMiniBossGeometry() {
   ]);
 }
 
-// --- Explosive barrel --------------------------------------------------------
-export function makeBarrelGeometry() {
-  return merge([
-    part(cyl(0.55, 0.55, 1.2, 12), 0xd23b2b, [0, 0.6, 0]),
-    part(cyl(0.57, 0.57, 0.1, 12), 0x2b2b2b, [0, 0.3, 0]),
-    part(cyl(0.57, 0.57, 0.1, 12), 0x2b2b2b, [0, 0.9, 0]),
-    part(cyl(0.5, 0.5, 0.04, 12), 0xffd23a, [0, 1.21, 0]),
-    part(box(0.5, 0.3, 0.02), 0xffd23a, [0, 0.62, 0.56]),
-  ]);
-}
-
 // --- Boss: Armored Mecha-Zombie Tank (faces +Z) ------------------------------
 export function makeBoss() {
   const g = new THREE.Group();
@@ -218,39 +207,4 @@ export class GateLabel {
     this.texture.needsUpdate = true;
   }
   dispose() { this.texture.dispose(); }
-}
-
-// --- Small number label (barrel HP) -----------------------------------------
-export class NumberSprite {
-  constructor(color = '#fff', bg = 'rgba(0,0,0,0.6)') {
-    this.canvas = document.createElement('canvas');
-    this.canvas.width = 128; this.canvas.height = 64;
-    this.ctx = this.canvas.getContext('2d');
-    this.color = color; this.bg = bg;
-    this.texture = new THREE.CanvasTexture(this.canvas);
-    this.texture.colorSpace = THREE.SRGBColorSpace;
-    this.sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.texture, depthWrite: false }));
-    this.sprite.scale.set(1.3, 0.65, 1);
-    this.value = null;
-  }
-  set(v) {
-    if (v === this.value) return;
-    this.value = v;
-    const { ctx } = this;
-    ctx.clearRect(0, 0, 128, 64);
-    ctx.fillStyle = this.bg;
-    ctx.beginPath();
-    ctx.roundRect(4, 4, 120, 56, 14);
-    ctx.fill();
-    ctx.fillStyle = this.color;
-    ctx.font = 'bold 40px Arial, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(String(v), 64, 34);
-    this.texture.needsUpdate = true;
-  }
-  dispose() {
-    this.texture.dispose();
-    this.sprite.material.dispose();
-  }
 }

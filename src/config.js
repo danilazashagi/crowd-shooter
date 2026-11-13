@@ -64,7 +64,6 @@ export const ENEMY = {
   BRUTE_SPEED: 2.4,
   MINI_SPEED: 2.0,        // mini-boss marches straight down the bridge
   MINI_SCALE: 2.4,
-  MINI_KILLS: 8,          // soldiers lost if the mini-boss reaches the squad
   LATERAL_CHASE: 0.55,    // share of sideways homing (bullets fly straight, so zombies must be dodgeable)
   CONTACT_PAD: 0.55,
 };
@@ -75,16 +74,15 @@ export const ENEMY = {
 // so a huge squad cannot farm unlimited soldiers.
 export const GATE = {
   POINT_COST: 1.5,
-  POINT_GROWTH: 0.35,
-  MAX_POINTS_PER_SEC: 5,
-  ACTIVE_DIST: 18,
-};
-
-export const BARREL = {
-  RADIUS: 0.6,
-  BLAST_RADIUS: 4.2,
-  BLAST_DAMAGE: 60,
-  SQUAD_KILL_FRACTION: 0.6,  // share of soldiers inside the blast radius who die
+  POINT_GROWTH: 0.45,
+  MAX_POINTS_PER_SEC: 3.5,
+  ACTIVE_DIST: 40,        // bullets change gates from far away, so the effect is visible early
+  MAX_PLUS: 20,           // no gate is generated above +20
+  // visual: gate frame scales with its value (smoothly, in updateRun)
+  SCALE_PER_POINT: 0.035, // scale per point gained/lost since the gate was spawned
+  SCALE_MIN: 0.7,
+  SCALE_MAX: 1.6,
+  SCALE_SHARPNESS: 9,
 };
 
 export const POOLS = {
@@ -99,13 +97,19 @@ export function levelParams(level) {
   const l = level - 1;
   return {
     length: 330 + l * 45,
-    zombieHp: (p) => 2 + p * 7 + l * 3.5,
-    waveSize: (p) => Math.round(3 + p * 17 + l * 6),
-    miniHp: (p) => Math.round(400 + p * 1600 + l * 1500),
+    zombieHp: (p) => 2 + p * 6 + l * 3,
+    waveSize: (p) => Math.round(3 + p * 13 + l * 4),
+    miniHp: (p) => Math.round(350 + p * 1100 + l * 1400),
     miniChance: (p) => (p > 0.3 ? 0.35 + l * 0.05 : 0),
     bruteChance: (p) => (p > 0.35 ? 0.08 + p * 0.12 + l * 0.02 : 0),
-    barrelHp: (p) => Math.round(8 + p * 30 + l * 6),
-    gateBase: (p) => Math.round(5 + p * 22 + l * 0.5),
+    // gentle growth: +2 … +10 on normal gates, risky narrow gates up to GATE.MAX_PLUS
+    gateBase: (p) => Math.round(2 + p * 7 + l * 0.6),
+    // --- per-level threat scaling ---------------------------------------
+    enemySpeedMul: Math.min(1.6, 1 + l * 0.1),     // zombies & mini-bosses move faster
+    enemyArmor: Math.min(0.45, l * 0.07),          // share of bullet damage absorbed
+    zombieKills: 1 + Math.floor(l / 2),            // soldiers lost per zombie contact
+    bruteKills: 3 + l,
+    miniKills: 8 + l * 3,
     bossHp: 8000 + l * 11000,
     bossAttackEvery: Math.max(1.35, 2.5 - l * 0.15),
   };

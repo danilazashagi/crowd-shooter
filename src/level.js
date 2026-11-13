@@ -2,7 +2,7 @@
 // Deterministic level layout generator.
 // Produces plain data; main.js turns it into scene objects.
 // ---------------------------------------------------------------------------
-import { TRACK, levelParams } from './config.js';
+import { TRACK, GATE, levelParams } from './config.js';
 
 export function mulberry32(seed) {
   let a = seed >>> 0;
@@ -20,7 +20,6 @@ export function mulberry32(seed) {
  *  gates:   [{ z, x, width, value }]  (gates sharing the same z form one row)
  *  rows:    [{ z, gateIdx: [...] }]
  *  enemies: [{ x, z, hp, brute, mini }]
- *  barrels: [{ x, z, hp }]
  *  bossZ, length
  */
 export function generateLevel(level) {
@@ -29,7 +28,7 @@ export function generateLevel(level) {
   const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
   const W = TRACK.HALF_WIDTH;
 
-  const out = { gates: [], rows: [], enemies: [], barrels: [], length: P.length, bossZ: -P.length - TRACK.BOSS_GAP };
+  const out = { gates: [], rows: [], enemies: [], length: P.length, bossZ: -P.length - TRACK.BOSS_GAP };
   let z = -32;
   let lastWasGate = false;
   let step = 0;
@@ -38,7 +37,8 @@ export function generateLevel(level) {
     const row = { z, gateIdx: [] };
     for (const d of defs) {
       row.gateIdx.push(out.gates.length);
-      out.gates.push({ z, x: d.x, width: d.width, value: d.value, row: out.rows.length });
+      const value = Math.min(GATE.MAX_PLUS, d.value);
+      out.gates.push({ z, x: d.x, width: d.width, value, row: out.rows.length });
     }
     out.rows.push(row);
   };
@@ -74,29 +74,32 @@ export function generateLevel(level) {
     const r = rnd();
     if (!lastWasGate || r < 0.25) {
       if (p > 0.15 && rnd() < 0.4) {
-        // RISK ROW: a narrow (2u) big bonus, flanked by minus gates and guarded by an
-        // explosive barrel right in front of it. Its position varies so idling never pays.
-        const big = base * 2 + Math.round(rnd() * base);
-        const side = Math.max(2, Math.round(base * (0.4 + rnd() * 0.5)));
+        // RISK ROW: a narrow (2u) bonus, flanked by minus gates and guarded by a pair of
+        // armoured mutants standing right in front of it. Position varies so idling never pays.
+        const big = Math.min(GATE.MAX_PLUS, base * 2 + Math.round(rnd() * base * 0.5));
+        const side = Math.max(2, Math.round(base * (0.5 + rnd() * 0.5)));
         const narrow = 2.0;
         const cx = pick([-2.9, 0, 2.9]);
         const leftW = cx - narrow / 2 + W, rightW = W - (cx + narrow / 2);
         addRow([
           { x: -W + leftW / 2, width: leftW, value: -side },
           { x: cx, width: narrow, value: big },
-          { x: W - rightW / 2, width: rightW, value: -(side + Math.round(rnd() * 3)) },
+          { x: W - rightW / 2, width: rightW, value: -(side + Math.round(rnd() * 2)) },
         ]);
-        out.barrels.push({ x: cx, z: z + 9, hp: P.barrelHp(p) });
+        const hp = P.zombieHp(p) * 6;
+        for (const dx of [-0.6, 0.6]) {
+          out.enemies.push({ x: Math.max(-W + 0.8, Math.min(W - 0.8, cx + dx)), z: z + 7, hp, brute: true, mini: false });
+        }
       } else {
         // CHOICE ROW: two halves.
         // the first two rows are a gentle tutorial: both options are positive
         const variant = out.rows.length < 2 ? 'plusplus' : pick(['plusplus', 'plusminus', 'plusminus', 'minusminus']);
         let a, b;
         if (variant === 'plusplus') {
-          a = base + Math.round(rnd() * base);
-          b = Math.max(1, Math.round(base * (0.3 + rnd() * 0.5)));
+          a = base + Math.round(rnd() * base * 0.5);
+          b = Math.max(1, Math.round(base * (0.3 + rnd() * 0.4)));
         } else if (variant === 'plusminus') {
-          a = base + Math.round(rnd() * base * 0.8);
+          a = base + Math.round(rnd() * base * 0.6);
           b = -Math.max(1, Math.round(base * (p < 0.25 ? 0.25 + rnd() * 0.25 : 0.4 + rnd() * 0.6)));
         } else {
           // "lesser evil" – only when the player should already have a decent squad
@@ -111,18 +114,12 @@ export function generateLevel(level) {
       }
       lastWasGate = true;
     } else {
-      // COMBAT: zombie wave, sometimes barrels in the middle of it.
+      // COMBAT: zombie wave (sometimes led by a mini-boss).
       const cx = (rnd() * 2 - 1) * 1.5;
       addWave(p, cx);
       // guarantee one mini-boss around mid-level, random extra ones later
       if ((minis === 0 && p > 0.45) || rnd() < P.miniChance(p) * (minis ? 0.5 : 1)) {
         addMini(p, Math.max(-2.5, Math.min(2.5, cx)));
-      }
-      if (rnd() < 0.55) {
-        const count = 1 + Math.floor(rnd() * 2);
-        for (let i = 0; i < count; i++) {
-          out.barrels.push({ x: (rnd() * 2 - 1) * (W - 1.2), z: z - 2 - rnd() * 6, hp: P.barrelHp(p) });
-        }
       }
       lastWasGate = false;
     }
